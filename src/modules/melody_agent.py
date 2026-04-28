@@ -44,6 +44,7 @@ class MelodyAgent():
         # Generate onsets with a simple syncopation probability
         is_onset = False
         is_syncopated = False
+        is_ratchet = False
 
         if subdivision == 0: 
             is_onset = True # Always play on the strong downbeats
@@ -58,6 +59,7 @@ class MelodyAgent():
         # Accents on syncopated onsets
         if is_syncopated:
             velocity = random.randint(100, 127) # Strong accent
+            is_ratchet = random.random() < 0.1 # 10% chance for a ratcheted note on syncopated hits
         else:
             velocity = random.randint(60, 90)   # Normal hit
 
@@ -79,6 +81,6 @@ class MelodyAgent():
         self.current_pitch = filtered_pitch
 
         # =============== MIDI Event Construction ===============
-        events.append(self._build_midi(note=filtered_pitch, velocity=velocity));
+        events.append(self._build_midi(note=filtered_pitch, velocity=velocity, is_ratchet=is_ratchet));
         
         return events

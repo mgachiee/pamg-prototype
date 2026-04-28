@@ -20,7 +20,11 @@ class PercussionAgent:
         self.TOM_MID = 48
         self.TOM_HIGH = 50
 
-    def _accent_beat_follower(self, beat: int, subdivision: int):
+        # Precompute sub-fill events for the entire loop
+        self.subfills = {}
+        self.add_sub_filling()
+
+    def _accent_beat_follower(self, beat: int, subdivision: int) -> tuple:
         # Accent/Beat Follower
         is_kick_beat = (subdivision == 0 and beat % 2 == 0)  # Kick on 1, 3, 5, ...
         is_snare_beat = (subdivision == 0 and beat % 2 == 1)  # Snare on 2, 4, 6, ...
@@ -28,9 +32,43 @@ class PercussionAgent:
 
         return is_kick_beat, is_snare_beat, is_hihat_beat
     
-    def _add_sub_filling(self, beat: int, subdivision: int):
-        pass
-    
+    def _add_sub_filling(self, beat: int, subdivision: int) -> list:
+        """
+        Adds sub-fill events based on the current beat and subdivision. 
+        This can include ghost notes, anticipatory hits, and fills.
+
+        Args:
+            beat (int): The current beat number in the loop.
+            subdivision (int): The current subdivision within the beat.
+
+        Returns:
+            list: A list of MIDI events to be added as sub-fills.
+        """
+        events = []
+
+        # small chance for ghost kick on off-beats
+        if subdivision != 0 and random.random() < 0.06:
+            events.append(self._build_midi(self.KICK, is_accent=False))
+
+        # anticipatory ghost/snare just before a snare beat
+        lookback = max(1, self.grain // 4)
+        if (beat % 2 == 1) and subdivision >= (self.grain - lookback) and random.random() < 0.25:
+            events.append(self._build_midi(self.SNARE, is_accent=False))
+
+        # occasional hi-hat ratchet (rapid subdivision)
+        if random.random() < 0.03:
+            events.append(self._build_midi(self.HIHAT_CLOSED, is_accent=False, is_ratchet=True))
+
+        # tom fill on the last beat of the loop (spread over the final subdivisions)
+        if beat == (self.loop_size - 1):
+            fill_window = max(1, self.grain // 2)
+            if subdivision >= (self.grain - fill_window) and random.random() < 0.35:
+                tom = random.choice([self.TOM_LOW, self.TOM_MID, self.TOM_HIGH])
+                events.append(self._build_midi(tom, is_accent=False))
+
+        return events
+
+
     def _build_midi(self, note: int, is_accent: bool, is_ratchet: bool = False):
         velocity = random.randint(100, 127) if is_accent else random.randint(50, 99)
         return {
@@ -45,10 +83,12 @@ class PercussionAgent:
     def process_tick(self, index: int):
         events = []
         
+        # =============== Rhythm Generation ===============
         # Determine exactly where we are in the loop based on the index
         beat = index // self.grain
         subdivision = index % self.grain
-
+        
+        # =============== Accent/Beat Follower ===============
         # Get the accent/beat follower results
         is_kick_beat, is_snare_beat, is_hihat_beat = self._accent_beat_follower(beat, subdivision)
 
@@ -69,7 +109,25 @@ class PercussionAgent:
             else:
                 events.append(self._build_midi(self.HIHAT_OPEN, is_accent=False))
 
+        # =============== Add/Sub Filling ===============
+        # Merge in any sub-fill events for this tick
+        events.extend(self.subfills.get(index, []))
+
         return events
 
     def add_sub_filling(self):
-        pass
+        """
+        Precompute sub-fill events for the entire loop and store them in self.subfills.
+        Returns a dict mapping absolute tick index -> list of events.
+        """
+        total_ticks = self.loop_size * self.grain
+        subfills = {}
+        for idx in range(total_ticks):
+            beat = idx // self.grain
+            subdivision = idx % self.grain
+            events = self._add_sub_filling(beat, subdivision)
+            if events:
+                subfills[idx] = events
+
+        self.subfills = subfills
+        return subfills
