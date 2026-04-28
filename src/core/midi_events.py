@@ -15,6 +15,17 @@ def normalize_event(
     default_channel: int,
     default_duration: float,
 ) -> Optional[MidiEvent]:
+    """
+    Normalizes a raw MIDI event dictionary into a structured MidiEvent dataclass.
+
+    Args:
+        hit: A dictionary containing raw MIDI event data.
+        default_channel: The default MIDI channel to use if not specified in the hit.
+        default_duration: The default duration to use if not specified in the hit.
+
+    Returns:
+        A MidiEvent instance with normalized values, or None if the hit is invalid.
+    """
     note = hit.get("note")
     if note is None:
         return None
