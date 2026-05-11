@@ -25,6 +25,10 @@ class TaskManager:
         """
         try:
             task.result()
+        except asyncio.CancelledError:
+            return
+        except KeyboardInterrupt:
+            print("Task cancelled by user.")
         except Exception as e:
             print(f"Task error: {e}")
 

@@ -292,8 +292,7 @@ class MultiParameterPresetInterpolator:
         weights = (w00, w10, w01, w11)
 
         logger.debug(
-            "Blending weights: A=%.2f, B=%.2f, C=%.2f, D=%.2f",
-            w00, w10, w01, w11,
+            f"Blending weights: A={w00:.2f}, B={w10:.2f}, C={w01:.2f}, D={w11:.2f}"
         )
 
         return Preset(
@@ -399,9 +398,10 @@ class MultiParameterPresetInterpolator:
 
         if name in self._LIST_DISCRETE_FIELDS or name in self._DISCRETE_FIELDS:
             # Discrete fields bypass smoothing entirely; a copy of target is
-            # stored, but `_state` ultimately keeps the *old* discrete value
-            # until `get_quantized_state()` is called at a phrase boundary.
-            return self._copy_if_list(target)
+            # stored separately in `_pending_discrete`. `_state` keeps the
+            # prior discrete value until `get_quantized_state()` is called
+            # at a phrase boundary.
+            return self._copy_if_list(current)
 
         # Default: scalar continuous — one lerp step.
         return lerp(float(current), float(target), alpha)

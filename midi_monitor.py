@@ -11,5 +11,7 @@ try:
     with mido.open_input(PORT_NAME) as inport:
         for msg in inport:
             print(msg)
+except KeyboardInterrupt:
+    print("Stopped by user.")
 except OSError:
     print(f"Error: Could not find port '{PORT_NAME}'. Is loopMIDI running?")
