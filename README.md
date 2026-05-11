@@ -43,6 +43,19 @@ python main.py
 - `main.py` uses `run_clock(...)` with example parameters — edit `main.py` to change tempo / loop size / grain.
 - Stop the process with Ctrl+C.
 
+## GUI (Tkinter)
+
+Launch the control panel (runs the async clock in the background):
+
+```bash
+python scripts/pamg_gui.py
+```
+
+- Includes Start/Stop, tempo/loop/grain inputs, base seed, X/Y sliders,
+	a state monitor, and a live console output panel.
+- Uses the same routing and port settings from
+	[src/core/configs.py](src/core/configs.py).
+
 Monitor an input port (simple test script):
 
 ```bash
@@ -50,6 +63,20 @@ python midi_monitor.py
 ```
 
 - Edit the `PORT_NAME` in `midi_monitor.py` to match your loopMIDI input (default `'Clock 0'`).
+
+## Tests
+
+Install test dependencies (included in `requirements.txt`):
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+Run the test suite:
+
+```bash
+pytest -q
+```
 
 ## Configuration
 

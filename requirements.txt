@@ -22,3 +22,5 @@ requests==2.33.1
 six==1.17.0
 urllib3==2.6.3
 webcolors==25.10.0
+pytest==8.3.2
+pytest-asyncio==0.23.6
