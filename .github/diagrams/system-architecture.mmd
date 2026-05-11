@@ -2,11 +2,13 @@
 flowchart LR
 	subgraph Stage1["Stage 1 — Global Control & Parameter Input"]
 		EXT[External controls / Game variables / UI]
+		BaseSeed[Base seed / Config]
 		IP["Preset Interpolator (XY Pad)<br>Presets: A,B,C,D"]
 		SG["Seeded Phrase Generator<br>(seed, Seeded Phrase Length)"]
 		EXT --> IP
+		BaseSeed --> SG
 		IP --> PARAMS[Interpolated parameter vectors]
-		SG -.-> PARAMS
+		IP -- phrase_length --> SG
 	end
 
 	subgraph Stage2["Stage 2 — System Initiation & Timing"]
@@ -22,6 +24,7 @@ flowchart LR
 		MA["Melody Agent<br>(Rhythm, Velocity RW, 'drunk' modes,<br>Harmony Filter)"]
 		PA["Percussion Agent<br>(Kick, Snare, Toms, Cymbals,<br>Ratchet)"]
 		OA["Orchestration Agent<br>(Instrument assignment,<br>Ranges, Voicing)"]
+		ACCENTS[Accent list]
 		PARAMS --> HA
 		PARAMS --> MA
 		PARAMS --> PA
@@ -30,12 +33,12 @@ flowchart LR
 		Count --> MA
 		Count --> PA
 		Count --> OA
-		SG --> HA
-		SG --> MA
-		SG --> PA
 		HA --> OA
 		MA --> OA
-		PA --> OA
+		MA --> ACCENTS
+		ACCENTS --> HA
+		ACCENTS --> PA
+		HA -- current chord --> MA
 	end
 
 	subgraph Stage4["Stage 4 — Final Output"]
