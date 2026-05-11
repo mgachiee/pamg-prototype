@@ -48,7 +48,7 @@ python main.py
 Launch the control panel (runs the async clock in the background):
 
 ```bash
-python scripts/pamg_gui.py
+python pamg_gui.py
 ```
 
 - Includes Start/Stop, tempo/loop/grain inputs, base seed, X/Y sliders,
@@ -63,20 +63,6 @@ python midi_monitor.py
 ```
 
 - Edit the `PORT_NAME` in `midi_monitor.py` to match your loopMIDI input (default `'Clock 0'`).
-
-## Tests
-
-Install test dependencies (included in `requirements.txt`):
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-Run the test suite:
-
-```bash
-pytest -q
-```
 
 ## Configuration
 
