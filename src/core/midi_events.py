@@ -1,14 +1,12 @@
-from dataclasses import dataclass
-from typing import Optional
+"""
+MIDI event normalization utilities.
 
-@dataclass
-class MidiEvent:
-    note: int
-    velocity: int
-    duration: float
-    channel: int
-    is_ratchet: bool = False
-    ratchet_count: int = 3
+Defines the canonical `MidiEvent` dataclass and helper functions that coerce
+raw event dictionaries into safe, typed values.
+"""
+
+from typing import Optional
+from src.models.midi_event import MidiEvent
 
 def normalize_event(
     hit: dict,
@@ -16,25 +14,38 @@ def normalize_event(
     default_duration: float,
 ) -> Optional[MidiEvent]:
     """
-    Normalizes a raw MIDI event dictionary into a structured MidiEvent dataclass.
+    Normalize a raw event dictionary into a `MidiEvent`.
 
     Args:
-        hit: A dictionary containing raw MIDI event data.
-        default_channel: The default MIDI channel to use if not specified in the hit.
-        default_duration: The default duration to use if not specified in the hit.
+        hit (dict): Raw MIDI event data (note, velocity, duration, etc.).
+        default_channel (int): Fallback channel when not provided.
+        default_duration (float): Fallback duration when not provided.
 
     Returns:
-        A MidiEvent instance with normalized values, or None if the hit is invalid.
+        Optional[MidiEvent]: Normalized event or None if invalid.
+    from typing import Optional
     """
+
+    # ---------------------------------------------------------------------------
+    # Data model
+    # ---------------------------------------------------------------------------
+    # Note is mandatory; drop any event that lacks it.
     note = hit.get("note")
     if note is None:
+
+
+    # ---------------------------------------------------------------------------
+    # Normalization
+    # ---------------------------------------------------------------------------
         return None
 
+    # Coerce note into a valid integer.
     try:
         note = int(note)
     except (TypeError, ValueError):
         return None
 
+    # Velocity defaults to 100 and is clamped into [1, 127].
     velocity = hit.get("velocity", 100)
     try:
         velocity = int(velocity)
@@ -42,6 +53,7 @@ def normalize_event(
         velocity = 100
     velocity = max(1, min(127, velocity))
 
+    # Duration defaults to the caller-provided value and must be positive.
     duration = hit.get("duration", default_duration)
     try:
         duration = float(duration)
@@ -50,6 +62,7 @@ def normalize_event(
     if duration <= 0:
         duration = default_duration
 
+    # Channel defaults to the provided channel and is clamped into [0, 15].
     channel = hit.get("channel", default_channel)
     if channel is None:
         channel = default_channel
@@ -59,6 +72,7 @@ def normalize_event(
         channel = default_channel
     channel = max(0, min(15, channel))
 
+    # Ratchet count must be at least 2 to create a perceivable roll.
     ratchet_count = hit.get("ratchet_count", 3)
     try:
         ratchet_count = int(ratchet_count)

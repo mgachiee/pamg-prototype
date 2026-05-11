@@ -1,6 +1,13 @@
+"""Orchestration agent for channel assignment and range enforcement."""
+
 import random
 from itertools import zip_longest
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Orchestration agent
+# ---------------------------------------------------------------------------
 
 
 class OrchestratorAgent:
@@ -8,6 +15,10 @@ class OrchestratorAgent:
     The Orchestration Agent (OA) assigns channels and enforces simple ranges
     for melodic and harmonic events before they are routed to MIDI output.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -22,6 +33,21 @@ class OrchestratorAgent:
         harmony_layer_mode: str = "probabilistic",
         seed: Optional[int] = None,
     ) -> None:
+        """
+        Initialize orchestration settings and program state.
+
+        Args:
+            melody_channel (int): MIDI channel for melody events.
+            harmony_channel (int): Default MIDI channel for harmony events.
+            harmony_channels (Optional[List[int]]): Harmony channels list.
+            harmony_layer_weights (Optional[List[float]]): Per-layer weights.
+            melody_range (Tuple[int, int]): Allowed melody pitch range.
+            harmony_range (Tuple[int, int]): Allowed harmony pitch range.
+            harmony_programs (Optional[List[int]]): Programs per layer.
+            melody_program (int): Program for melody channel.
+            harmony_layer_mode (str): "deterministic" or "probabilistic".
+            seed (Optional[int]): RNG seed for weighted layer selection.
+        """
         self.melody_channel = int(melody_channel)
         self.harmony_channel = int(harmony_channel)
         self.melody_range = (
@@ -54,6 +80,10 @@ class OrchestratorAgent:
         self._last_harmony_pairs: List[Tuple[int, int]] = []
         self._queue_program_changes(force=True)
 
+    # ------------------------------------------------------------------
+    # Event processing
+    # ------------------------------------------------------------------
+
     def _clamp_note(self, note: int, note_range: Tuple[int, int]) -> int:
         low, high = note_range
         return max(low, min(high, int(note)))
@@ -84,6 +114,7 @@ class OrchestratorAgent:
         """
         merged: List[Dict[str, Any]] = []
 
+        # Prepare melody events with channel and range enforcement.
         for event in melody_events:
             merged.append(
                 self._prepare_event(
@@ -94,6 +125,7 @@ class OrchestratorAgent:
             )
 
         if harmony_events:
+            # Apply layer masks and weights per harmony channel.
             layer_mask = self._normalize_layer_mask(self._harmony_layer_mask)
             for idx, (channel, weight) in enumerate(
                 zip(self.harmony_channels, self.harmony_layer_weights)
@@ -113,14 +145,31 @@ class OrchestratorAgent:
 
         return merged
 
+    # ------------------------------------------------------------------
+    # Parameter updates
+    # ------------------------------------------------------------------
+
     def update_params(self, **kwargs) -> bool:
         """
         Apply parameter updates for orchestration behavior.
 
-        Supported keys: `melody_channel`, `harmony_channel`,
-        `harmony_channels`, `harmony_layer_weights`,
-        `melody_range`, `harmony_range`, `melody_program`,
-        `harmony_programs`, `harmony_layer_mode`.
+        Supported keys:
+            - melody_channel
+            - harmony_channel
+            - harmony_channels
+            - harmony_layer_weights
+            - melody_range
+            - harmony_range
+            - melody_program
+            - harmony_programs
+            - harmony_layer_mode
+            - harmony_layer_mask
+            - channel_families
+            - family_ranges
+            - channel_ranges
+
+        Returns:
+            bool: True if any parameter changed.
         """
         changed = False
 
@@ -245,6 +294,10 @@ class OrchestratorAgent:
 
         return changed
 
+    # ------------------------------------------------------------------
+    # Program change handling
+    # ------------------------------------------------------------------
+
     def consume_program_changes(self) -> List[Tuple[int, int]]:
         """
         Return and clear pending program changes as (channel, program) pairs.
@@ -254,7 +307,12 @@ class OrchestratorAgent:
         return changes
 
     def on_phrase_start(self) -> None:
+        """Force a program-change snapshot at phrase boundaries."""
         self._queue_program_changes(force=True)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _normalize_harmony_channels(
         self,

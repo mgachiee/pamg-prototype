@@ -1,19 +1,32 @@
+"""Melody agent for stochastic melodic line generation."""
+
 import logging
 import random
 from enum import Enum
 from typing import List, Optional, Tuple, Union
+
+
+# ---------------------------------------------------------------------------
+# Melody agent
+# ---------------------------------------------------------------------------
 
 logger = logging.getLogger(__name__)
 
 
 class MelodyAgent:
     """
-    The Melody Agent (MA) generates melodic lines that complement
-    the Harmony Agent's chords with stochastic motion and
-    expressive velocity.
+    Generate a melodic line aligned with the harmony context.
+
+    The agent produces onset patterns, velocity contours, and pitch movement
+    using stochastic rules that respond to the Harmony Agent's chord context.
     """
+    # Enum namespaces for movement and pitch modes.
     movement_type = Enum("MovementType", "odd even")
     drunk_modes = Enum("DrunkModes", "drunk drunk_contour")
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -30,6 +43,25 @@ class MelodyAgent:
         velocity_range: Tuple[int, int] = (60, 110),
         velocity_step: int = 6,
     ) -> None:
+        """
+        Initialize the melody agent and its random state.
+
+        Args:
+            movement (Union[movement_type, str]): Syncopation direction
+                preference ("odd" or "even").
+            loop_size (int): Number of beats in the loop.
+            grain (int): Subdivision factor per beat.
+            max_step (Optional[int]): Maximum step size in semitones.
+            syncopation_probability (Optional[float]): Chance to add
+                off-beat onsets.
+            accent_probability (Optional[float]): Chance to accent beats.
+            ratchet_probability (Optional[float]): Chance to ratchet hits.
+            pitch_range (Optional[Tuple[int, int]]): Allowed MIDI range.
+            seed (Optional[int]): RNG seed for reproducible output.
+            drunk_mode (str): "drunk" or "drunk_contour".
+            velocity_range (Tuple[int, int]): Allowed velocity range.
+            velocity_step (int): Max step size for velocity walk.
+        """
         self.movement = self._normalize_movement(movement)
         self.loop_size = loop_size
         self.grain = grain
@@ -94,6 +126,10 @@ class MelodyAgent:
         self._onset_indices = set()
         self._accent_beats = set()
         self.on_loop_start(0)
+
+    # ------------------------------------------------------------------
+    # Event builders and normalization
+    # ------------------------------------------------------------------
 
     def _build_midi(
         self,
@@ -209,6 +245,10 @@ class MelodyAgent:
 
         return step
 
+    # ------------------------------------------------------------------
+    # Pattern generation
+    # ------------------------------------------------------------------
+
     def _preferred_syncopation_subdivisions(self) -> List[int]:
         subdivisions = list(range(1, self.grain))
         if not subdivisions:
@@ -248,8 +288,16 @@ class MelodyAgent:
         self._onset_indices = onset_indices
         self._accent_beats = accent_beats
 
+    # ------------------------------------------------------------------
+    # Loop/phrase lifecycle
+    # ------------------------------------------------------------------
+
     def on_loop_start(self, loop_index: int) -> None:
-        """Prepare onset and accent patterns for the new loop."""
+        """Prepare onset and accent patterns for the new loop.
+
+        Args:
+            loop_index (int): Index of the current loop (unused).
+        """
         _ = loop_index
         self._build_onset_pattern()
 
@@ -273,6 +321,11 @@ class MelodyAgent:
         self._shape_steps_remaining -= 1
 
     def get_accent_list(self) -> List[int]:
+        """Return a sorted list of accent beats for the current loop.
+
+        Returns:
+            List[int]: Beat indices marked as accents.
+        """
         return sorted(self._accent_beats)
 
     def _select_duration(
@@ -293,13 +346,26 @@ class MelodyAgent:
 
         return max(pulse_duration * 0.2, duration)
 
+    # ------------------------------------------------------------------
+    # Tick processing
+    # ------------------------------------------------------------------
+
     def process_tick(
         self,
         index: int,
         current_chord: Optional[List[int]],
         pulse_duration: Optional[float] = None,
     ) -> List[dict]:
-        """Processes the MA logic for a single clock tick."""
+        """Process a single clock tick and emit melody events.
+
+        Args:
+            index (int): Current tick index.
+            current_chord (Optional[List[int]]): Harmony chord tones.
+            pulse_duration (Optional[float]): Pulse duration in seconds.
+
+        Returns:
+            List[dict]: Raw melody event dictionaries.
+        """
         beat = index // self.grain
         subdivision = index % self.grain
         events = []
@@ -373,12 +439,33 @@ class MelodyAgent:
         
         return events
     
+    # ------------------------------------------------------------------
+    # Parameter updates
+    # ------------------------------------------------------------------
+
     def update_params(self, **kwargs) -> bool:
-        """
-        Apply parameter update. Supported keys: `seed`, `max_step`,
-        `syncopation_probability`, `accent_probability`,
-        `ratchet_probability`, `pitch_range`, `drunk_mode`,
-        `velocity_range`, `velocity_step`.
+        """Apply parameter updates for melody behavior.
+
+        Supported keys:
+            - seed
+            - max_step
+            - syncopation_probability
+            - accent_probability
+            - ratchet_probability
+            - pitch_range
+            - drunk_mode
+            - velocity_range
+            - velocity_step
+            - add_probability
+            - sub_probability
+            - staccato_probability
+            - legato_probability
+            - shape_depth
+            - shape_length
+            - movement
+
+        Returns:
+            bool: True if any parameter changed.
         """
 
         changed = False

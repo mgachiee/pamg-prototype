@@ -1,3 +1,10 @@
+"""
+Global configuration defaults for PAMG.
+
+Defines routing settings, orchestration defaults, rhythm templates, and the
+four corner presets used by the XY pad interpolator.
+"""
+
 from src.core.routing import RoutingType
 from src.core.preset_interpolator import Preset
 

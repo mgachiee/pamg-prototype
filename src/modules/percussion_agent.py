@@ -1,13 +1,26 @@
+"""Percussion agent for groove and fill generation."""
+
 import random
 from typing import List, Optional
+
+
+# ---------------------------------------------------------------------------
+# Percussion agent
+# ---------------------------------------------------------------------------
 
 from src.core.configs import PERCUSSION_TEMPLATE
 
 class PercussionAgent:
     """
-    The Percussion Agent (PA) is responsible for generating rhythmic patterns that drive the groove of the music.
-    It uses a combination of beat generation, accent/beat following, and sub-filling techniques to create dynamic and evolving drum patterns.
+    Generate percussion patterns for the groove layer.
+
+    The agent builds base drum patterns per beat, adds stochastic fills, and
+    supports phrase-aware variations triggered by chord changes.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -17,6 +30,16 @@ class PercussionAgent:
         seed: Optional[int] = 0,
         phrase_length: int = 4,
     ):
+        """
+        Initialize the percussion agent and pattern state.
+
+        Args:
+            loop_size (int): Number of beats per loop.
+            grain (int): Subdivision factor per beat.
+            meter (Optional[str]): Optional time signature key (e.g. "4/4").
+            seed (Optional[int]): RNG seed for reproducibility.
+            phrase_length (int): Number of loops per phrase.
+        """
         # Loop and grain information (time signature and subdivision) to inform rhythmic decisions
         self.loop_size = loop_size
         self.grain = grain
@@ -90,13 +113,27 @@ class PercussionAgent:
         self.subfills = {}
         self.add_sub_filling()
 
+    # ------------------------------------------------------------------
+    # Loop/phrase lifecycle
+    # ------------------------------------------------------------------
+
     def on_loop_start(self, loop_index: int) -> None:
+        """
+        Update loop counters and regenerate sub-fill plans.
+
+        Args:
+            loop_index (int): Index of the current loop.
+        """
         self._loop_index = max(0, int(loop_index))
         if self.phrase_length <= 1:
             self._phrase_end = True
         else:
             self._phrase_end = (self._loop_index % self.phrase_length) == (self.phrase_length - 1)
         self.add_sub_filling()
+
+    # ------------------------------------------------------------------
+    # Template and fill selection
+    # ------------------------------------------------------------------
 
     def _get_template_key(self) -> str:
         if self.meter:
@@ -207,10 +244,24 @@ class PercussionAgent:
 
         return is_kick_beat, is_snare_beat, is_hihat_beat, is_tom_beat, is_ride_beat, is_crash_beat
 
+    # ------------------------------------------------------------------
+    # Accent and chord notifications
+    # ------------------------------------------------------------------
+
     def notify_accents(self, accent_beats: List[int]) -> None:
+        """Receive accent beats from the melody agent.
+
+        Args:
+            accent_beats (List[int]): Beat indices marked as accents.
+        """
         self._accent_beats = {int(beat) for beat in accent_beats}
 
     def notify_chord_change(self, chord_pool: int) -> None:
+        """Record chord pool changes to align phrase fills.
+
+        Args:
+            chord_pool (int): Current harmony chord pool identifier.
+        """
         if int(chord_pool) == 1:
             self._pending_phrase_fill = True
     
@@ -259,7 +310,19 @@ class PercussionAgent:
             "channel": self.midi_channel,
         }
 
+    # ------------------------------------------------------------------
+    # Event generation
+    # ------------------------------------------------------------------
+
     def process_tick(self, index: int):
+        """Generate percussion events for a single clock tick.
+
+        Args:
+            index (int): Current tick index in the loop.
+
+        Returns:
+            list: Raw percussion event dictionaries.
+        """
         events = []
         
         # =============== Rhythm Generation ===============
@@ -349,6 +412,10 @@ class PercussionAgent:
 
         return events
 
+    # ------------------------------------------------------------------
+    # Precomputed fills
+    # ------------------------------------------------------------------
+
     def add_sub_filling(self):
         """
         Precompute sub-fill events for the entire loop and store them in self.subfills.
@@ -369,7 +436,19 @@ class PercussionAgent:
         self.subfills = subfills
         return subfills
 
+    # ------------------------------------------------------------------
+    # Parameter updates
+    # ------------------------------------------------------------------
+
     def update_params(self, **kwargs) -> bool:
+        """Apply parameter updates for percussion behavior.
+
+        Supported keys include probability fields (kick, snare, hats, fills),
+        meter, seed, and integer density settings.
+
+        Returns:
+            bool: True if any parameter changed.
+        """
         changed = False
 
         def clamp_prob(value: float) -> float:
@@ -433,12 +512,17 @@ class PercussionAgent:
 
         return changed
 
+    # ------------------------------------------------------------------
+    # Debug utilities
+    # ------------------------------------------------------------------
+
     def display_grid(self, events: list):
         """
         Utility function to visualize the generated pattern in a grid format.
 
         Arguments:
-            events (list): A list of MIDI events generated for a single tick, where each event
+            events (list): List of MIDI events for a loop. Each event should
+                include a `note` and optional `index` field.
         """
         grid = [[" " for _ in range(self.total_pulses)] for _ in range(4)]  # 4 rows for KICK, SNARE, HIHAT, TOM
         for event in events:

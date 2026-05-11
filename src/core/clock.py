@@ -1,3 +1,10 @@
+"""
+Real-time clock loop and agent orchestration.
+
+This module owns the authoritative timing grid, drives parameter updates,
+and dispatches MIDI events for all PAMG agents.
+"""
+
 import asyncio
 import mido
 from typing import Callable, Optional, Tuple
@@ -38,13 +45,23 @@ from src.core.logger import Logger
 
 logger = Logger()
 
-async def _midi_writer(port, queue: asyncio.Queue):
+
+# ---------------------------------------------------------------------------
+# MIDI writer task
+# ---------------------------------------------------------------------------
+
+# ------------------------------------------------------------------
+# Queue drain loop
+# ------------------------------------------------------------------
+
+async def _midi_writer(port, queue: asyncio.Queue) -> None:
     """
-    Continuously listens to the MIDI message queue and sends messages to the MIDI port in a non-blocking way.
+    Drain a MIDI queue and send messages to a port.
 
     Args:
-        port: The MIDI output port to send messages to.
-        queue: An asyncio.Queue that receives MIDI messages to be sent. The writer will exit when it receives a None message.
+        port: MIDI output port for the messages.
+        queue (asyncio.Queue): Queue receiving `mido.Message` instances.
+            A `None` sentinel stops the writer.
     """
     while True:
         message = await queue.get()
@@ -59,6 +76,10 @@ async def _midi_writer(port, queue: asyncio.Queue):
             queue.task_done()
 
 
+# ---------------------------------------------------------------------------
+# Game-state mapping
+# ---------------------------------------------------------------------------
+
 def map_gamevars_to_xy(
     player_health: float,
     enemy_count: float,
@@ -66,7 +87,11 @@ def map_gamevars_to_xy(
     max_enemies: float = MAX_ENEMIES,
 ) -> Tuple[float, float]:
     """
-    Map raw game-state values to normalized XY coordinates for interpolation.
+    Map raw game-state values to normalized XY coordinates.
+
+    Health is inverted so low health drives higher X (more tension), while
+    enemy count pushes Y upward. Both axes are clamped to [0, 1] and
+    softened with a power curve for smoother control near zero.
 
     Args:
         player_health (float): Raw health value (0..max_health).
@@ -75,7 +100,7 @@ def map_gamevars_to_xy(
         max_enemies (float): Upper bound used for normalization.
 
     Returns:
-        Tuple[float, float]: Normalized (x, y) within [0, 1].
+        Tuple[float, float]: Normalized (x, y) in [0, 1].
     """
     health_norm = clamp(player_health / max_health)
     enemy_norm = clamp(enemy_count / max_enemies)
@@ -87,6 +112,10 @@ def map_gamevars_to_xy(
     y = y ** 1.5
 
     return x, y
+
+# ---------------------------------------------------------------------------
+# Main clock loop
+# ---------------------------------------------------------------------------
 
 async def run_clock(
     tempo: int,
@@ -103,35 +132,49 @@ async def run_clock(
     max_ticks: Optional[int] = None,
 ) -> None:
     """
-    Builds the real-time grid for the sequencer based on the tempo, loop size, and grain size.
+    Run the real-time clock loop and drive all PAMG agents.
+
+    The loop computes a deterministic pulse grid from tempo, loop size, and
+    grain. Each pulse updates interpolated parameters, triggers phrase-level
+    changes, gathers agent events, and dispatches MIDI output.
 
     Args:
-        tempo (int): The tempo in beats per minute (BPM).
-        loop_size (int): The size of the loop in beats.
-        grain (int): The size of each grain in beats. (e.g., 4 for quarter notes, 8 for eighth notes, etc.)
-        is_playing (bool): A flag indicating whether the sequencer is currently playing or not.
-        routing_mode (RoutingType): The MIDI routing mode (single_port or split_ports).
-        single_port_name (str): The name of the MIDI port to use in single-port mode.
-        melody_port_name (str): The name of the MIDI port for melody output in split-port mode.
-        drum_port_name (str): The name of the MIDI port for drum output in split-port mode.
-        debug_midi (bool): If True, logs detailed MIDI event information for debugging purposes.
-        game_state_callback (Optional[Callable[[], Tuple[float, float]]]): A callback function to retrieve the game state.
-        base_seed (int): The base seed for motif generation (0 = improv).
+        tempo (int): Tempo in beats per minute (BPM).
+        loop_size (int): Loop length in beats.
+        grain (int): Subdivision factor (1 = quarter notes, 2 = eighths).
+        is_playing (bool): Whether the clock loop should run.
+        routing_mode (RoutingType): MIDI routing strategy.
+        single_port_name (str): Port name for single-port routing.
+        melody_port_name (str): Port name for melody output.
+        drum_port_name (str): Port name for percussion output.
+        debug_midi (bool): Enable verbose MIDI logging when True.
+        game_state_callback (
+            Optional[Callable[[], Tuple[float, float]]]
+        ):
+            Optional callback returning (health, enemies).
+        base_seed (int): Base seed for motif generation (0 = improv).
         max_ticks (Optional[int]): Optional tick limit for tests or demos.
+
+    Raises:
+        OSError: If required MIDI ports are unavailable.
+        ValueError: If routing settings are invalid.
     """
-    # =============== Count Loop ===============
-    # Total indeces (pulses) in the loop (0, 1, 2, ..., total_pulses-1)
+    # ------------------------------------------------------------------
+    # Timing grid
+    # ------------------------------------------------------------------
+    # Total pulses in the loop (0..total_pulses-1)
     total_pulses = loop_size * grain
 
-    # Exact time duration of each pulse in seconds
+    # Exact time duration of each pulse in seconds.
     pulse_duration = 60 / (tempo * grain)
 
     logger.info(f"Starting Clock: {tempo} BPM, Loop Size: {loop_size} beats, Grain Size: {grain} beats")
     logger.debug(f"Total Pulses: {total_pulses}, Pulse Duration: {pulse_duration:.2f} seconds")
 
-    # ============== Agent Network ===============
-    # Initialize agents with loop and grain information to make informed decisions based on the current position in the loop
-    # TODO: Run in parallel to maximize efficiency and ensure all agents see the same loop position for their decision making.
+    # ------------------------------------------------------------------
+    # Agent network
+    # ------------------------------------------------------------------
+    # Initialize agents with loop and grain information.
     percussion_agent = PercussionAgent(loop_size=loop_size, grain=grain)
     melody_agent = MelodyAgent(
         movement=MelodyAgent.movement_type.odd,
@@ -151,27 +194,27 @@ async def run_clock(
     )
 
     spg = SeededPhraseGenerator(base_seed=base_seed)
-    _spg_prev_seed = spg.current_seed # Keep track of the previous seed to detect changes
+    _spg_prev_seed = spg.current_seed  # Track seed changes.
     last_discrete_params = PRESET_A
     last_chord_pool = harmony_agent.get_chord_pool()
 
-    # Initialize the preset interpolator with the defined presets for each corner of the XY pad.
-    # This will allow us to smoothly interpolate between different musical parameter settings based on player/enemy values.
+    # Initialize the XY pad preset interpolator.
     interpolator = MultiParameterPresetInterpolator(PRESET_A, PRESET_B, PRESET_C, PRESET_D, smoothing_time=0.12)
 
-    # ============== MIDI Port Initialization ===============
-    # Initialize MIDI ports for melody and percussion output based on the selected routing mode.
+    # ------------------------------------------------------------------
+    # MIDI port initialization
+    # ------------------------------------------------------------------
+    # Initialize MIDI ports for melody and percussion output.
     port_mel = None
     port_perc = None
 
-    # Queues for MIDI messages. If using single port mode, both agents will share the same queue and writer task.
-    # Queues decouple the real-time clock loop from the MIDI output, allowing for smoother timing and avoiding blocking calls in the main loop.
+    # Queues decouple the clock loop from MIDI output.
     mel_queue: Optional[asyncio.Queue] = None
     perc_queue: Optional[asyncio.Queue] = None
     mel_writer_task = None
     perc_writer_task = None
 
-    # Task manager to keep track of all scheduled note/chord tasks so we can await their completion on shutdown
+    # Track scheduled note/chord tasks for shutdown.
     scheduled_tasks = TaskManager()
 
     try:
@@ -188,7 +231,7 @@ async def run_clock(
         else:
             logger.info(f"Routing mode: {routing_mode} -> melody='{melody_port_name}', drums='{drum_port_name}'")
 
-        # Create queues and writer tasks. If single port mode, use a single queue.
+        # Create queues and writer tasks. If single port mode, use one queue.
         if port_mel is port_perc:
             combined = asyncio.Queue()
             mel_queue = combined
@@ -219,34 +262,35 @@ async def run_clock(
 
         await _send_program_changes(mel_queue)
 
-        # ============== Main Clock Loop ===============
-        tick = 0 # Used to track the current pulse index in the loop (0 to total_pulses-1)
+        # ------------------------------------------------------------------
+        # Main clock loop
+        # ------------------------------------------------------------------
+        tick = 0  # Current pulse index in the loop.
         loop_start = asyncio.get_running_loop().time()
 
         while is_playing:
-            # Calculate the scheduled time for the current tick
+            # Calculate the scheduled time for the current tick.
             scheduled_time = loop_start + tick * pulse_duration
             sleep_for = scheduled_time - asyncio.get_running_loop().time()
 
-            # If we're ahead of schedule, sleep until the next tick
+            # If we're ahead of schedule, sleep until the next tick.
             if sleep_for > 0:
                 await asyncio.sleep(sleep_for)
-            # If we're behind, log a warning and continue immediately
+            # If we're behind, log a warning and continue immediately.
             elif sleep_for <= 0:
                 logger.warning(f"Warning: Behind schedule by {-sleep_for:.3f} seconds.")
 
-            # Current position in the loop is determined by local_index (0 to total_pulses-1),
-            # which resets every loop iteration.
+            # Derive loop indices for this tick.
             local_index = tick % total_pulses
-
-            # Current measure index (0 to loop_size-1) and subdivision index (0 to grain-1)
-            # within the measure.
             loop_index = tick // total_pulses
             beat_index = local_index // grain
             measure_index = beat_index % loop_size
             subdivision = local_index % grain
 
-            # Interpolator: map game state -> params and apply to agents
+            # ------------------------------------------------------------------
+            # Game-state sampling and interpolation
+            # ------------------------------------------------------------------
+            # Map game state to XY and interpolate parameters.
             if game_state_callback is not None:
                 try:
                     player_health, enemy_count = game_state_callback()
@@ -257,8 +301,10 @@ async def run_clock(
                 player_health, enemy_count = MAX_HEALTH, 0
 
             x, y = map_gamevars_to_xy(player_health, enemy_count)
+
             params = interpolator.update(x, y, pulse_duration)
 
+            # Determine phrase boundary to snap discrete parameters.
             phrase_length = max(
                 1,
                 int(round(params.seeded_phrase_length)),
@@ -271,6 +317,9 @@ async def run_clock(
             if quantized_params is not None:
                 last_discrete_params = quantized_params
 
+            # ------------------------------------------------------------------
+            # Agent parameter updates
+            # ------------------------------------------------------------------
             melody_agent.update_params(
                 max_step=max(1, int(round(params.melody_max_step))),
                 pitch_range=(
@@ -318,6 +367,9 @@ async def run_clock(
                 harmony_accent_probability=float(params.harmony_accent_probability),
             )
 
+            # ------------------------------------------------------------------
+            # Phrase and loop boundary hooks
+            # ------------------------------------------------------------------
             if phrase_start:
                 melody_agent.on_phrase_start()
                 orchestrator_agent.on_phrase_start()
@@ -332,11 +384,14 @@ async def run_clock(
             if phrase_start:
                 await _send_program_changes(mel_queue)
 
+            # ------------------------------------------------------------------
+            # Chord + seed updates
+            # ------------------------------------------------------------------
             current_chord = harmony_agent.get_current_chord(
                 measure_index=measure_index,
             )
 
-            # On downbeat, update seed and log chord changes
+            # On downbeat, update seed and log chord changes.
             if subdivision == 0:
                 logger.info(
                     f"Measure {measure_index + 1}/{loop_size} - Current Chord: {current_chord}",
@@ -352,12 +407,15 @@ async def run_clock(
                     harmony_agent.update_params(seed=new_seed)
                     _spg_prev_seed = new_seed
 
-            # Produce agent events using local_index so agents see the same index pattern
+            # Handle chord pool transitions for percussion fills.
             current_chord_pool = harmony_agent.get_chord_pool()
             if current_chord_pool != last_chord_pool:
                 percussion_agent.notify_chord_change(current_chord_pool)
                 last_chord_pool = current_chord_pool
 
+            # ------------------------------------------------------------------
+            # Event generation
+            # ------------------------------------------------------------------
             try:
                 drum_hits = percussion_agent.process_tick(index=local_index)
             except Exception as e:
@@ -392,6 +450,9 @@ async def run_clock(
                 logger.debug(f"Orchestration tick error: {e}")
                 orchestrated_hits = []
 
+            # ------------------------------------------------------------------
+            # MIDI dispatch
+            # ------------------------------------------------------------------
             # Main stream dispatch (melody + harmony)
             for hit in orchestrated_hits:
                 event = normalize_event(
@@ -411,7 +472,7 @@ async def run_clock(
                         f"ch={event.channel} dur={event.duration:.3f}"
                     )
 
-                # Racheted melody acts as Noisemaker to mimic human-like tremolo (fast repeating notes)
+                # Ratcheted melody creates a tremolo-like effect.
                 if event.is_ratchet:
                     task = asyncio.create_task(
                         play_ratchet(
@@ -423,7 +484,6 @@ async def run_clock(
                             channel=event.channel,
                         )
                     )
-                # Normal note plays as usual
                 else:
                     task = asyncio.create_task(
                         play_note(
@@ -451,7 +511,7 @@ async def run_clock(
                         f"ch={event.channel} dur={event.duration:.3f}"
                     )
 
-                # Ratcheted drums add extra "ghost" hits for more groove and human feel
+                # Ratcheted drums add extra hits for groove.
                 if event.is_ratchet:
                     task = asyncio.create_task(
                         play_ratchet(
@@ -463,7 +523,6 @@ async def run_clock(
                             channel=event.channel,
                         )
                     )
-                # Normal drum hit plays as usual
                 else:
                     task = asyncio.create_task(
                         play_note(
@@ -492,7 +551,10 @@ async def run_clock(
         logger.exception(f"MIDI setup/runtime error: {e}")
 
     finally:
-        # Wait for all scheduled note/chord task to finish before shutting down to ensure all MIDI messages are sent properly
+        # ------------------------------------------------------------------
+        # Shutdown and cleanup
+        # ------------------------------------------------------------------
+        # Wait for scheduled note/chord tasks to finish.
         player_tasks = [t for t in scheduled_tasks.get_scheduled_tasks() if t is not None]
         if player_tasks:
             if debug_midi:

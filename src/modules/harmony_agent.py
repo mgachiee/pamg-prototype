@@ -1,14 +1,27 @@
+"""Harmony agent for chord selection and harmonic event generation."""
+
 import random
 from typing import Dict, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# Harmony agent
+# ---------------------------------------------------------------------------
 
 from src.core.configs import HARMONY_TEMPLATE
 
 
 class HarmonyAgent:
     """
-    The Harmony Agent is responsible for the musical backdrop. 
-    It generates chord progressions, harmonies, and transpositions based on the current state of the music.
+    Generate chord progressions and harmonic MIDI events.
+
+    The agent tracks a chord progression, applies tension-driven variation,
+    and emits harmony events aligned to the global clock grid.
     """
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         loop_size: int = 4,
@@ -18,6 +31,17 @@ class HarmonyAgent:
         key_root: int = 60,
         scale_mode: str = "major",
     ):
+        """
+        Initialize the harmony agent and seed its progression state.
+
+        Args:
+            loop_size (int): Number of beats in the loop.
+            grain (int): Subdivision factor per beat.
+            seed (Optional[int]): RNG seed for reproducible output.
+            meter (Optional[str]): Optional time signature key (e.g. "4/4").
+            key_root (int): MIDI pitch for the tonic root.
+            scale_mode (str): "major" or "minor" scale selection.
+        """
         self.loop_size = max(1, int(loop_size))
         self.grain = max(1, int(grain))
         self.meter = meter
@@ -48,17 +72,22 @@ class HarmonyAgent:
         self._accent_beats = set()
         self._post_filter: Optional[List[int]] = None
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def get_current_chord(self, measure_index: int) -> List[int]:
         """
-        Determine the current chord based on the measure index and the progression.
+        Return the chord for the current measure.
 
-        Arguments:
-        - measure_index: The index of the current measure in the loop.
+        Args:
+            measure_index (int): Current measure index within the loop.
 
         Returns:
-        - A list of MIDI note values representing the current chord.
+            List[int]: MIDI note numbers for the active chord.
         """
         # Determine the current chord based on the measure index
+        # Ensure a progression is available before indexing it.
         if not self._degree_progression:
             self._select_progression()
 
@@ -81,6 +110,7 @@ class HarmonyAgent:
             self._last_measure_index = measure_index
             reset_arp = True
 
+        # Build chord tones for the selected degree.
         degree = self._degree_progression[self._degree_index]
         self._current_chord = self._build_chord_from_degree(degree)
         if reset_arp:
@@ -88,9 +118,22 @@ class HarmonyAgent:
         return list(self._current_chord)
 
     def notify_accents(self, accent_beats: List[int]) -> None:
+        """
+        Receive the melody accent beats to align harmony accents.
+
+        Args:
+            accent_beats (List[int]): Beat indices flagged as accents.
+        """
         self._accent_beats = {int(beat) for beat in accent_beats}
 
     def set_post_filter(self, pitch_subset: Optional[List[int]]) -> None:
+        """
+        Apply or clear a pitch subset filter for the current chord.
+
+        Args:
+            pitch_subset (Optional[List[int]]): Allowed pitches or None to
+                clear the filter.
+        """
         if pitch_subset is None:
             self._post_filter = None
         else:
@@ -98,9 +141,10 @@ class HarmonyAgent:
 
     def get_chord_pool(self) -> int:
         """
-        Returns a small integer identifying the current chord pool.
+        Return the current chord pool identifier.
 
-        Pool 1 is reserved for the first chord in the progression.
+        Pool 1 is reserved for the first chord in the progression and is
+        used by the seeded phrase generator.
         """
         if not self._degree_progression:
             return 1
@@ -108,11 +152,14 @@ class HarmonyAgent:
 
     def process_tick(self, index: int, pulse_duration: float) -> List[dict]:
         """
-        Generate harmony events for a single tick.
+        Generate harmony events for a single clock tick.
 
         Args:
-            index: The current tick index in the loop.
-            pulse_duration: Duration (seconds) of a single pulse.
+            index (int): Current tick index in the loop.
+            pulse_duration (float): Duration of a single pulse in seconds.
+
+        Returns:
+            List[dict]: Raw harmony event dictionaries.
         """
         beat = index // self.grain
         subdivision = index % self.grain
@@ -154,10 +201,20 @@ class HarmonyAgent:
         """
         Apply parameter updates for harmony behavior.
 
-        Supported keys: `seed`, `chord_change_probability`,
-        `chord_complexity`, `tension`, `harmony_add_probability`,
-        `harmony_sub_probability`, `harmony_accent_probability`,
-        `meter`, `key_root`, `scale_mode`.
+        Supported keys:
+            - seed
+            - chord_change_probability
+            - chord_complexity
+            - tension
+            - harmony_add_probability
+            - harmony_sub_probability
+            - harmony_accent_probability
+            - meter
+            - key_root
+            - scale_mode
+
+        Returns:
+            bool: True if any parameter changed.
         """
         changed = False
 
@@ -226,6 +283,10 @@ class HarmonyAgent:
                 changed = True
 
         return changed
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
     def _should_change_chord(self) -> bool:
         if self.chord_change_probability >= 1.0:

@@ -1,3 +1,5 @@
+"""Preset data model for PAMG parameter snapshots."""
+
 from dataclasses import dataclass
 from typing import List
 
@@ -5,8 +7,10 @@ from typing import List
 class Preset:
     """
     Defines a preset configuration for all agents and orchestration.
-    Each field represents a parameter that can be interpolated or selected
-    between presets.
+
+    Each field represents a parameter used by the interpolator or the agents.
+    Continuous fields are blended across presets, while discrete fields are
+    snapped at phrase boundaries (see `core/preset_interpolator.py`).
     """
     melody_max_step: float
     melody_pitch_low: float

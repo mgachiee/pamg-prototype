@@ -1,4 +1,9 @@
-"""Tkinter GUI to control the PAMG real-time clock."""
+"""
+Tkinter GUI to control the PAMG real-time clock.
+
+Provides start/stop controls, game-variable sliders, and a live parameter
+monitor so the system can be tested without a game runtime.
+"""
 
 from __future__ import annotations
 
@@ -30,21 +35,39 @@ from src.core.preset_interpolator import MultiParameterPresetInterpolator
 
 
 class SharedGameState:
-    """Thread-safe holder for game-state values used by the clock."""
+    """Thread-safe holder for game-state values used by the clock.
+
+    This object is shared between the UI thread and the async clock thread.
+    """
 
     def __init__(self, health: float, enemies: float) -> None:
+        """Initialize the shared game-state container.
+
+        Args:
+            health (float): Initial player health value.
+            enemies (float): Initial enemy count value.
+        """
         self._lock = threading.Lock()
         self._health = health
         self._enemies = enemies
 
     def set_values(self, health: float, enemies: float) -> None:
-        """Update the game-state values."""
+        """Update the game-state values atomically.
+
+        Args:
+            health (float): New player health value.
+            enemies (float): New enemy count value.
+        """
         with self._lock:
             self._health = health
             self._enemies = enemies
 
     def get_values(self) -> Tuple[float, float]:
-        """Return current (health, enemies)."""
+        """Return the latest (health, enemies) values.
+
+        Returns:
+            Tuple[float, float]: Current health and enemy count.
+        """
         with self._lock:
             return self._health, self._enemies
 
@@ -53,10 +76,20 @@ class QueueLoggingHandler(logging.Handler):
     """Logging handler that writes formatted records into a queue."""
 
     def __init__(self, message_queue: queue.Queue[str]) -> None:
+        """Initialize the handler with the target queue.
+
+        Args:
+            message_queue (queue.Queue[str]): Queue that receives log strings.
+        """
         super().__init__()
         self._message_queue = message_queue
 
     def emit(self, record: logging.LogRecord) -> None:
+        """Format and enqueue a log record.
+
+        Args:
+            record (logging.LogRecord): Log record to format and enqueue.
+        """
         try:
             message = self.format(record)
         except Exception:
@@ -68,14 +101,28 @@ class StreamRedirector:
     """Redirects stdout/stderr writes into a queue."""
 
     def __init__(self, message_queue: queue.Queue[str]) -> None:
+        """Initialize the redirector with the target queue.
+
+        Args:
+            message_queue (queue.Queue[str]): Queue receiving stream data.
+        """
         self._message_queue = message_queue
 
     def write(self, message: str) -> int:
+        """Write a string into the queue.
+
+        Args:
+            message (str): Text to enqueue.
+
+        Returns:
+            int: Length of the written message.
+        """
         if message:
             self._message_queue.put(message)
         return len(message)
 
     def flush(self) -> None:
+        """No-op flush to satisfy the stream API."""
         return None
 
 
@@ -83,6 +130,7 @@ class AsyncClockRunner:
     """Runs the PAMG clock in a background asyncio loop."""
 
     def __init__(self) -> None:
+        """Initialize loop and task tracking state."""
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._task: Optional[asyncio.Task] = None
@@ -102,6 +150,7 @@ class AsyncClockRunner:
         self._ready.wait(timeout=1.0)
 
     def _run_loop(self) -> None:
+        """Create and run the private asyncio event loop."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
@@ -113,7 +162,12 @@ class AsyncClockRunner:
         self,
         coro_factory: Callable[[], Coroutine[Any, Any, None]],
     ) -> None:
-        """Schedule a new clock task if none is running."""
+        """Schedule a new clock task if none is running.
+
+        Args:
+            coro_factory (Callable[[], Coroutine[Any, Any, None]]): Factory
+                that builds the clock coroutine.
+        """
         self.start()
         if self._loop is None:
             return
@@ -128,6 +182,11 @@ class AsyncClockRunner:
         self._loop.call_soon_threadsafe(_create_task)
 
     def _on_task_done(self, task: asyncio.Task) -> None:
+        """Release the stored task and log any unexpected errors.
+
+        Args:
+            task (asyncio.Task): Completed clock task.
+        """
         with self._task_lock:
             self._task = None
         try:
@@ -162,9 +221,18 @@ class AsyncClockRunner:
 
 
 class PamgGui:
-    """Tkinter GUI for PAMG control and monitoring."""
+    """Tkinter GUI for PAMG control and monitoring.
+
+    This class builds the UI, manages a background clock runner, and keeps
+    the state monitor in sync with the current interpolated parameters.
+    """
 
     def __init__(self, root: tk.Tk) -> None:
+        """Initialize the UI and wire background services.
+
+        Args:
+            root (tk.Tk): Root Tkinter window.
+        """
         self._root = root
         self._root.title("PAMG Control Panel")
 
@@ -201,6 +269,8 @@ class PamgGui:
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _configure_logging(self) -> None:
+        """Redirect logging and stdout/stderr into the GUI console."""
+        # Reset handlers so the GUI owns logging output.
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.DEBUG)
         for handler in list(root_logger.handlers):
@@ -219,6 +289,7 @@ class PamgGui:
         sys.stderr = StreamRedirector(self._log_queue)
 
     def _build_ui(self) -> None:
+        """Build and layout the Tkinter widgets."""
         main_frame = ttk.Frame(self._root, padding=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
 
@@ -226,6 +297,7 @@ class PamgGui:
         self._root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
 
+        # Master clock controls.
         master_frame = ttk.LabelFrame(
             main_frame,
             text="Master Clock Controls",
@@ -283,6 +355,7 @@ class PamgGui:
             width=8,
         ).grid(row=3, column=1, sticky="w", pady=4)
 
+        # Global settings (base seed, routing, etc.).
         system_frame = ttk.LabelFrame(
             main_frame,
             text="Global System Controls",
@@ -304,6 +377,7 @@ class PamgGui:
             width=10,
         ).grid(row=0, column=1, sticky="w", pady=4)
 
+        # Game variable sliders and state monitor.
         game_frame = ttk.LabelFrame(
             main_frame,
             text="Game Variable Simulation",
@@ -377,6 +451,7 @@ class PamgGui:
         state_text.configure(state="disabled")
         self._state_text = state_text
 
+        # Console output panel.
         console_frame = ttk.LabelFrame(
             main_frame,
             text="Console Output",
@@ -406,11 +481,17 @@ class PamgGui:
         console_text.configure(yscrollcommand=scrollbar.set)
 
     def _pulse_duration(self) -> float:
+        """Compute pulse duration from the current tempo and grain.
+
+        Returns:
+            float: Duration of a pulse in seconds.
+        """
         tempo = max(1, int(self._tempo_var.get()))
         grain = max(1, int(self._grain_var.get()))
         return 60.0 / (tempo * grain)
 
     def _toggle_start_stop(self) -> None:
+        """Start or stop the clock depending on the current state."""
         if self._is_running:
             self._runner.stop_clock()
             self._is_running = False
@@ -447,6 +528,11 @@ class PamgGui:
         logging.info("Clock start requested")
 
     def _on_game_var_change(self, _value: str = "") -> None:
+        """Handle slider changes and refresh the state monitor.
+
+        Args:
+            _value (str): Tkinter callback value (unused).
+        """
         health = float(self._game_x_var.get())
         enemies = float(self._game_y_var.get())
         self._state.set_values(health, enemies)
@@ -455,6 +541,7 @@ class PamgGui:
         self._update_state_monitor()
 
     def _update_state_monitor(self) -> None:
+        """Refresh the live state monitor panel."""
         if self._state_text is None:
             return
 
@@ -489,6 +576,11 @@ class PamgGui:
         self._state_text.configure(state="disabled")
 
     def _append_console(self, message: str) -> None:
+        """Append a log message to the console widget.
+
+        Args:
+            message (str): Text to append.
+        """
         if self._console_text is None:
             return
         self._console_text.configure(state="normal")
@@ -497,6 +589,7 @@ class PamgGui:
         self._console_text.configure(state="disabled")
 
     def _poll_logs(self) -> None:
+        """Drain queued log messages into the console widget."""
         while True:
             try:
                 message = self._log_queue.get_nowait()
@@ -506,11 +599,13 @@ class PamgGui:
         self._root.after(50, self._poll_logs)
 
     def _on_close(self) -> None:
+        """Handle window close by stopping background tasks."""
         self._runner.shutdown()
         self._root.destroy()
 
 
 def main() -> None:
+    """Launch the PAMG control panel GUI."""
     root = tk.Tk()
     PamgGui(root)
     root.mainloop()
