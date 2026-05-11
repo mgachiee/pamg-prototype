@@ -1,0 +1,60 @@
+%% System Architecture — Data-flow diagram (Mermaid)
+flowchart LR
+	subgraph Stage1["Stage 1 — Global Control & Parameter Input"]
+		EXT[External controls / Game variables / UI]
+		IP["Preset Interpolator (XY Pad)<br>Presets: A,B,C,D"]
+		SG["Seeded Phrase Generator<br>(seed, Seeded Phrase Length)"]
+		EXT --> IP
+		IP --> PARAMS[Interpolated parameter vectors]
+		SG -.-> PARAMS
+	end
+
+	subgraph Stage2["Stage 2 — System Initiation & Timing"]
+		PS[Play/Stop]
+		Clock["Clock Module<br>(Tempo, Loop size, Grain)"]
+		Count["Count Loop<br>(0..(loop_size*grain)-1)"]
+		PS --> Clock
+		Clock --> Count
+	end
+
+	subgraph Stage3["Stage 3 — Agent Network"]
+		HA["Harmony Agent<br>(Chord Dict, Progression Selector,<br>Chord Builder, Arpeggiator)"]
+		MA["Melody Agent<br>(Rhythm, Velocity RW, 'drunk' modes,<br>Harmony Filter)"]
+		PA["Percussion Agent<br>(Kick, Snare, Toms, Cymbals,<br>Ratchet)"]
+		OA["Orchestration Agent<br>(Instrument assignment,<br>Ranges, Voicing)"]
+		PARAMS --> HA
+		PARAMS --> MA
+		PARAMS --> PA
+		PARAMS --> OA
+		Count --> HA
+		Count --> MA
+		Count --> PA
+		Count --> OA
+		SG --> HA
+		SG --> MA
+		SG --> PA
+		HA --> OA
+		MA --> OA
+		PA --> OA
+	end
+
+	subgraph Stage4["Stage 4 — Final Output"]
+		MAIN["Main Stream (Melody + Harmony)"]
+		PERC["Percussion Stream"]
+		MIDI["MIDI Port(s) -> DAW / Synths"]
+		OA --> MAIN
+		PA --> PERC
+		MAIN --> MIDI
+		PERC --> MIDI
+	end
+
+	%% Seed decision flow (monitored by Seeded Phrase Generator)
+	HA --> ChordPool[Chord Pool #]
+	ChordPool --> Decision{Chord Pool == 1?}
+	Decision -- Yes --> SeedCalc[Compute seeded random offset]
+	Decision -- No --> Idle[Idle]
+	SeedCalc --> SG
+	SeedCalc -->|broadcast| HA
+	SeedCalc -->|broadcast| MA
+	SeedCalc -->|broadcast| PA
+
