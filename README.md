@@ -1,109 +1,87 @@
-
 # PAMG Prototype
 
-A compact agent-driven MIDI sequencer prototype that generates melodic, harmonic, and percussion events and outputs them as live MIDI messages (using `mido` with `python-rtmidi`). The system is built for experimentation and routes MIDI to virtual ports (e.g., loopMIDI) so you can receive the output in a DAW.
+A high-performance, agent-driven MIDI sequencer prototype designed for real-time generative music. The system produces melodic, harmonic, and percussion events that adapt dynamically to a global state (e.g., game variables like health and tension). It is built for seamless integration with DAWs via virtual MIDI ports (like loopMIDI).
+
+## Key Features
+
+*   **Multi-Agent Orchestration**: Discrete agents for Melody, Harmony, Percussion, and Orchestration work in tandem to produce cohesive musical output.
+*   **Advanced Orchestrator (OA)**:
+    *   **Musical Octave Transposition**: Ensures notes stay within instrument-specific ranges by shifting them by octaves rather than simple clipping.
+    *   **Melody Doubling**: Simulates multiple performers by duplicating melody lines across multiple MIDI channels.
+    *   **Intelligent Voice Distribution**: Automatically distributes chord tones and arpeggiated notes across multiple harmony instruments for rich orchestral textures.
+    *   **Phrase-Bound Program Changes**: Manages MIDI instrument changes at phrase boundaries to maintain musical form.
+*   **XY Pad Interpolation**: Real-time blending between four corner presets (Exploration, Combat, Tension, Chaotic) with temporal smoothing.
+*   **High-Precision Timing**: An `asyncio`-driven clock that prevents drift and decouples MIDI output via asynchronous queues to eliminate jitter.
+*   **Live State Monitoring**: Real-time broadcasting of the system's internal state (parameters, XY coordinates, game variables) to a monitor panel.
 
 ## Reference
 
-This prototype is based on and inspired by the referenced study:
+This prototype is based on and inspired by the study:
+[A Progressive-Adaptive Music Generator (PAMG)](https://dl.acm.org/doi/epdf/10.1145/3677996.3678291) (Duarte, A. E. L., 2024).
 
-https://dl.acm.org/doi/epdf/10.1145/3677996.3678291
+## Quick Start
 
-Please cite or reference the paper when using this prototype in academic or published work.
+### Prerequisites
+*   Python 3.9+
+*   **Windows Users**: [loopMIDI](https://www.tobias-erichsen.de/software/loopmidi.html) to create virtual MIDI ports.
+*   **DAW**: Ableton Live, Cakewalk, FL Studio, etc., to host your virtual instruments.
 
-## Quick start
+### Setup
+1.  Install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+2.  Create virtual MIDI ports in loopMIDI (e.g., `Melody 1` and `Drums 2`).
+3.  In your DAW, enable these ports as MIDI Inputs.
 
-Prerequisites
-- Python 3.9+ installed
-- Windows users: loopMIDI (or another virtual MIDI driver) to create virtual MIDI ports
+### Running
+*   **Launch GUI Control Panel**:
+    ```bash
+    python pamg_gui.py
+    ```
+*   **Headless/CLI Mode**:
+    ```bash
+    python main.py
+    ```
 
-Install Python dependencies:
+## Multi-Channel Configuration
 
-```bash
-python -m pip install -r requirements.txt
+PAMG supports sophisticated multi-instrument setups. Configuration is centralized in `src/core/configs.py`.
+
+### Example Orchestral Setup
+In `src/core/configs.py`, you can define an orchestra across 5 MIDI channels:
+```python
+MELODY_CHANNELS = [0, 1]      # MIDI Ch 1 (Violin) and Ch 2 (Flute doubling)
+HARMONY_CHANNELS = [2, 3, 4]  # MIDI Ch 3 (Piano), Ch 4 (Strings), Ch 5 (Bass)
+
+# Define instrument-specific ranges
+FAMILY_RANGES = {
+    "strings": (55, 96),
+    "brass": (48, 84),
+    "bass": (24, 48),
+}
+
+# Map channels to families for range enforcement
+CHANNEL_FAMILIES = {
+    0: "strings",
+    3: "brass",
+    4: "bass",
+}
 ```
 
-Create virtual MIDI ports (Windows + loopMIDI)
-1. Download and install loopMIDI (e.g., loopMIDI by Tobias Erichsen).
-2. Open loopMIDI and click `+` to create new ports.
-3. Create ports named to match the defaults in the project (or change them in configuration):
-	 - `Melody 1`
-	 - `Drums 2`
-	 - (optional) `Clock 0` — useful for `midi_monitor.py`
-4. In your DAW, enable the corresponding loopMIDI ports as MIDI inputs so the DAW can receive from this app.
+## Project Structure
 
-## Running
+*   `pamg_gui.py`: Tkinter-based control panel with XY pad and state monitor.
+*   `src/core/clock.py`: The authoritative timing loop and agent coordinator.
+*   `src/core/preset_interpolator.py`: High-performance bilinear blending for musical parameters.
+*   `src/modules/orchestrator_agent.py`: Handles MIDI routing, doubling, and musical transposition.
+*   `src/modules/harmony_agent.py`: Generates chord progressions and tagged voices for distribution.
+*   `src/modules/melody_agent.py`: Stochastic melody generator based on tension and seeds.
+*   `src/modules/percussion_agent.py`: Procedural drum pattern and groove generator.
+*   `src/core/players.py`: Low-level asynchronous MIDI dispatching.
 
-Start the sequencer (sends MIDI to configured output ports):
+## Development & Debugging
 
-```bash
-python main.py
-```
-
-- `main.py` uses `run_clock(...)` with example parameters — edit `main.py` to change tempo / loop size / grain.
-- Stop the process with Ctrl+C.
-
-## GUI (Tkinter)
-
-Launch the control panel (runs the async clock in the background):
-
-```bash
-python pamg_gui.py
-```
-
-- Includes Start/Stop, tempo/loop/grain inputs, base seed, X/Y sliders,
-	a state monitor, and a live console output panel.
-- Uses the same routing and port settings from
-	[src/core/configs.py](src/core/configs.py).
-
-Monitor an input port (simple test script):
-
-```bash
-python midi_monitor.py
-```
-
-- Edit the `PORT_NAME` in `midi_monitor.py` to match your loopMIDI input (default `'Clock 0'`).
-
-## Configuration
-
-- Routing and port names: edit [src/core/configs.py](src/core/configs.py)
-	- `ROUTING_MODE`: `RoutingType.split_ports` (default) or `RoutingType.single_port`
-	- `MELODY_PORT_NAME`, `DRUM_PORT_NAME`, `SINGLE_PORT_NAME`: names that must match your loopMIDI/DAW ports
-	- `DEBUG_MIDI`: set to `True` to enable verbose MIDI debug logging
-
-- In `split_ports` mode, both `MELODY_PORT_NAME` and `DRUM_PORT_NAME` must be available; otherwise the app raises an error at startup.
-
-## Project structure (key files)
-
-- [main.py](main.py): example runner — calls `run_clock(...)`.
-- [midi_monitor.py](midi_monitor.py): tiny script to listen to a named input port.
-- [src/core/midi_io.py](src/core/midi_io.py): port discovery/open/close helper functions.
-- [src/core/clock.py](src/core/clock.py): `run_clock()` — main real-time loop, queues, MIDI writers, scheduling.
-- [src/core/midi_events.py](src/core/midi_events.py): `MidiEvent` dataclass and normalization.
-- [src/core/players.py](src/core/players.py): async helpers to send `note_on` / `note_off` / chords / ratchets.
-- [src/core/configs.py](src/core/configs.py): routing & port name defaults and `DEBUG_MIDI`.
-- [src/core/routing.py](src/core/routing.py): routing enum (`single_port` / `split_ports`).
-- [src/modules/melody_agent.py](src/modules/melody_agent.py): melody generation.
-- [src/modules/percussion_agent.py](src/modules/percussion_agent.py): percussion/groove generator.
-- [src/modules/harmony_agent.py](src/modules/harmony_agent.py): chord progression provider.
-
-## Development notes & tips
-
-- There is no CLI implemented; runtime parameters (tempo, loop size, grain) are set in `main.py`. For experiments, call `run_clock()` directly or add an argument parser.
-- Debugging:
-	- Set `DEBUG_MIDI = True` in [src/core/configs.py](src/core/configs.py) for verbose logging.
-	- `open_midi_ports()` prints available output ports; ensure names match exactly.
-- MIDI details:
-	- Uses `mido` with `python-rtmidi` backend (see `requirements.txt`).
-	- Melody defaults to MIDI channel 0; percussion uses channel 9 (GM drum channel).
-
-## Notes / Next steps
-
-- Add CLI flags for runtime parameters and port overrides.
-- Add a small health-check that lists available ports and gives clearer errors.
-- Optionally add tests and CI for packaging.
-
----
-
-If you'd like, I can also (A) add CLI argument parsing to `main.py`, or (B) prepare a short checklist for connecting a specific DAW (e.g., Ableton Live) to loopMIDI ports.
-
+*   **Verbose Logging**: Set `DEBUG_MIDI = True` in `src/core/configs.py` to see raw event dispatching in the console.
+*   **Performance**: The core loop is optimized to minimize object allocation and garbage collection churn for real-time stability.
+*   **Customization**: Adjust the corner presets in `src/core/configs.py` to change how the system responds to different tension levels.
