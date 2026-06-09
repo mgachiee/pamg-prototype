@@ -32,11 +32,6 @@ def normalize_event(
     # Note is mandatory; drop any event that lacks it.
     note = hit.get("note")
     if note is None:
-
-
-    # ---------------------------------------------------------------------------
-    # Normalization
-    # ---------------------------------------------------------------------------
         return None
 
     # Coerce note into a valid integer.

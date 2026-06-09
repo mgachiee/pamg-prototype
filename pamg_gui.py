@@ -239,13 +239,6 @@ class PamgGui:
         self._runner = AsyncClockRunner()
         self._log_queue: queue.Queue[str] = queue.Queue()
         self._state = SharedGameState(MAX_HEALTH, 0.0)
-        self._interpolator = MultiParameterPresetInterpolator(
-            PRESET_A,
-            PRESET_B,
-            PRESET_C,
-            PRESET_D,
-            smoothing_time=0.12,
-        )
 
         self._tempo_var = tk.IntVar(value=120)
         self._loop_size_var = tk.IntVar(value=6)
@@ -507,6 +500,10 @@ class PamgGui:
         def _game_state_callback() -> Tuple[float, float]:
             return self._state.get_values()
 
+        def _broadcast_callback(state_dict: dict) -> None:
+            # Thread-safe update via root.after
+            self._root.after(0, self._broadcast_handler, state_dict)
+
         def _coro_factory() -> Coroutine[Any, Any, None]:
             return clock_module.run_clock(
                 tempo=tempo,
@@ -519,6 +516,7 @@ class PamgGui:
                 drum_port_name=DRUM_PORT_NAME,
                 debug_midi=DEBUG_MIDI,
                 game_state_callback=_game_state_callback,
+                state_broadcast_callback=_broadcast_callback,
                 base_seed=base_seed,
             )
 
@@ -538,36 +536,32 @@ class PamgGui:
         self._state.set_values(health, enemies)
         self._game_x_label_var.set(f"{health:.1f}")
         self._game_y_label_var.set(f"{enemies:.1f}")
-        self._update_state_monitor()
+        # Manual refresh is no longer needed as the clock broadcasts state.
+
+    def _broadcast_handler(self, state_dict: dict) -> None:
+        """Handle state broadcast from the clock thread.
+
+        Args:
+            state_dict (dict): Interpolated state from the clock.
+        """
+        if self._state_text is None:
+            return
+        self._state_text.configure(state="normal")
+        self._state_text.delete("1.0", "end")
+        self._state_text.insert("end", json.dumps(state_dict, indent=2))
+        self._state_text.configure(state="disabled")
 
     def _update_state_monitor(self) -> None:
-        """Refresh the live state monitor panel."""
+        """Initialize the state monitor panel."""
         if self._state_text is None:
             return
 
+        # Initial placeholder before the clock starts.
         health, enemies = self._state.get_values()
-        x, y = clock_module.map_gamevars_to_xy(health, enemies)
-        params = self._interpolator.update(
-            x,
-            y,
-            self._pulse_duration(),
-        )
-
         state = {
             "health": round(health, 2),
             "enemies": round(enemies, 2),
-            "xy": {
-                "x": round(x, 3),
-                "y": round(y, 3),
-            },
-            "melody_pitch": [
-                int(round(params.melody_pitch_low)),
-                int(round(params.melody_pitch_high)),
-            ],
-            "melody_syncopation": round(params.melody_syncopation, 3),
-            "drum_kick_prob": round(params.drum_kick_probability, 3),
-            "harmony_tension": round(params.harmony_tension, 3),
-            "phrase_length": int(round(params.seeded_phrase_length)),
+            "status": "Ready to start...",
         }
 
         self._state_text.configure(state="normal")

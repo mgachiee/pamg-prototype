@@ -148,6 +148,9 @@ class MultiParameterPresetInterpolator:
         # Prevent degenerate smoothing (division by zero or negative time).
         self.smoothing_time = max(0.001, smoothing_time)
 
+        # Cache fields to avoid redundant lookups in the main loop.
+        self._fields = fields(a)
+
         # Running interpolated state — starts at preset A.
         # Continuously updated by `update()` toward the blended target.
         self._state = self._copy_preset(a)
@@ -202,7 +205,7 @@ class MultiParameterPresetInterpolator:
                     getattr(target, field.name),
                     alpha,
                 )
-                for field in fields(self._state)
+                for field in self._fields
             }
         )
 
@@ -216,7 +219,7 @@ class MultiParameterPresetInterpolator:
                 if field.name in self._DISCRETE_FIELDS
                 or field.name in self._LIST_DISCRETE_FIELDS
                 else self._copy_if_list(getattr(self._state, field.name))
-                for field in fields(self._state)
+                for field in self._fields
             }
         )
 
@@ -252,7 +255,7 @@ class MultiParameterPresetInterpolator:
                     if field.name in self._DISCRETE_FIELDS
                     or field.name in self._LIST_DISCRETE_FIELDS
                     else self._copy_if_list(getattr(self._state, field.name))
-                    for field in fields(self._state)
+                    for field in self._fields
                 }
             )
 
@@ -298,7 +301,7 @@ class MultiParameterPresetInterpolator:
         return Preset(
             **{
                 field.name: self._blend_value(field.name, weights)
-                for field in fields(self.a)
+                for field in self._fields
             }
         )
 
@@ -592,7 +595,7 @@ class MultiParameterPresetInterpolator:
         return Preset(
             **{
                 field.name: self._copy_if_list(getattr(preset, field.name))
-                for field in fields(preset)
+                for field in self._fields
             }
         )
 

@@ -128,6 +128,7 @@ async def run_clock(
     drum_port_name: str = DRUM_PORT_NAME,
     debug_midi: bool = DEBUG_MIDI,
     game_state_callback: Optional[Callable[[], Tuple[float, float]]] = None,
+    state_broadcast_callback: Optional[Callable[[dict], None]] = None,
     base_seed: int = 42,
     max_ticks: Optional[int] = None,
 ) -> None:
@@ -318,54 +319,75 @@ async def run_clock(
                 last_discrete_params = quantized_params
 
             # ------------------------------------------------------------------
+            # State broadcasting
+            # ------------------------------------------------------------------
+            if state_broadcast_callback is not None:
+                state_broadcast_callback({
+                    "health": round(player_health, 2),
+                    "enemies": round(enemy_count, 2),
+                    "xy": {"x": round(x, 3), "y": round(y, 3)},
+                    "melody_pitch": [
+                        int(round(params.melody_pitch_low)),
+                        int(round(params.melody_pitch_high)),
+                    ],
+                    "melody_syncopation": round(params.melody_syncopation, 3),
+                    "drum_kick_prob": round(params.drum_kick_probability, 3),
+                    "harmony_tension": round(params.harmony_tension, 3),
+                    "phrase_length": phrase_length,
+                })
+
+            # ------------------------------------------------------------------
             # Agent parameter updates
             # ------------------------------------------------------------------
-            melody_agent.update_params(
-                max_step=max(1, int(round(params.melody_max_step))),
-                pitch_range=(
-                    int(round(params.melody_pitch_low)),
-                    int(round(params.melody_pitch_high)),
-                ),
-                syncopation_probability=float(params.melody_syncopation),
-                accent_probability=float(params.melody_accent),
-                ratchet_probability=float(params.melody_ratchet_probability),
-            )
+            # Only update agents if parameters have changed significantly,
+            # or at phrase boundaries to ensure consistency.
+            if tick == 0 or phrase_start or interpolator.smoothing_time > 0:
+                melody_agent.update_params(
+                    max_step=max(1, int(round(params.melody_max_step))),
+                    pitch_range=(
+                        int(round(params.melody_pitch_low)),
+                        int(round(params.melody_pitch_high)),
+                    ),
+                    syncopation_probability=float(params.melody_syncopation),
+                    accent_probability=float(params.melody_accent),
+                    ratchet_probability=float(params.melody_ratchet_probability),
+                )
 
-            orchestrator_agent.update_params(
-                melody_range=(
-                    int(round(params.melody_pitch_low)),
-                    int(round(params.melody_pitch_high)),
-                ),
-                harmony_range=(
-                    int(round(params.harmony_pitch_low)),
-                    int(round(params.harmony_pitch_high)),
-                ),
-                harmony_layer_weights=[
-                    float(weight)
-                    for weight in params.harmony_layer_weights
-                ],
-                harmony_programs=last_discrete_params.harmony_programs,
-                melody_program=last_discrete_params.melody_program,
-                harmony_layer_mode=last_discrete_params.harmony_layer_mode,
-            )
+                orchestrator_agent.update_params(
+                    melody_range=(
+                        int(round(params.melody_pitch_low)),
+                        int(round(params.melody_pitch_high)),
+                    ),
+                    harmony_range=(
+                        int(round(params.harmony_pitch_low)),
+                        int(round(params.harmony_pitch_high)),
+                    ),
+                    harmony_layer_weights=[
+                        float(weight)
+                        for weight in params.harmony_layer_weights
+                    ],
+                    harmony_programs=last_discrete_params.harmony_programs,
+                    melody_program=last_discrete_params.melody_program,
+                    harmony_layer_mode=last_discrete_params.harmony_layer_mode,
+                )
 
-            percussion_agent.update_params(
-                kick_sub_prob=1.0 - float(params.drum_kick_probability),
-                ghost_kick_prob=float(params.drum_ghost_kick_probability),
-                snare_sub_prob=1.0 - float(params.drum_snare_probability),
-                hat_open_prob=float(params.drum_hat_open_probability),
-                hat_closed_prob=float(params.drum_hat_closed_probability),
-                hat_ratchet_prob=float(params.drum_ratchet_probability),
-            )
+                percussion_agent.update_params(
+                    kick_sub_prob=1.0 - float(params.drum_kick_probability),
+                    ghost_kick_prob=float(params.drum_ghost_kick_probability),
+                    snare_sub_prob=1.0 - float(params.drum_snare_probability),
+                    hat_open_prob=float(params.drum_hat_open_probability),
+                    hat_closed_prob=float(params.drum_hat_closed_probability),
+                    hat_ratchet_prob=float(params.drum_ratchet_probability),
+                )
 
-            harmony_agent.update_params(
-                tension=float(params.harmony_tension),
-                chord_complexity=float(params.harmony_chord_complexity),
-                chord_change_probability=float(params.harmony_chord_change_probability),
-                harmony_add_probability=float(params.harmony_add_probability),
-                harmony_sub_probability=float(params.harmony_sub_probability),
-                harmony_accent_probability=float(params.harmony_accent_probability),
-            )
+                harmony_agent.update_params(
+                    tension=float(params.harmony_tension),
+                    chord_complexity=float(params.harmony_chord_complexity),
+                    chord_change_probability=float(params.harmony_chord_change_probability),
+                    harmony_add_probability=float(params.harmony_add_probability),
+                    harmony_sub_probability=float(params.harmony_sub_probability),
+                    harmony_accent_probability=float(params.harmony_accent_probability),
+                )
 
             # ------------------------------------------------------------------
             # Phrase and loop boundary hooks
