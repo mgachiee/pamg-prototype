@@ -22,12 +22,12 @@ class OrchestratorAgent:
 
     def __init__(
         self,
-        melody_channel: int = 0,
-        harmony_channel: int = 1,
+        melody_channels: Optional[List[int]] = None,
+        harmony_channel: int = 2,
         harmony_channels: Optional[List[int]] = None,
         harmony_layer_weights: Optional[List[float]] = None,
-        melody_range: Tuple[int, int] = (72, 96),
-        harmony_range: Tuple[int, int] = (48, 72),
+        melody_range: Tuple[int, int] = (48, 84),
+        harmony_range: Tuple[int, int] = (40, 76),
         harmony_programs: Optional[List[int]] = None,
         melody_program: int = 0,
         harmony_layer_mode: str = "probabilistic",
@@ -37,18 +37,18 @@ class OrchestratorAgent:
         Initialize orchestration settings and program state.
 
         Args:
-            melody_channel (int): MIDI channel for melody events.
+            melody_channels (Optional[List[int]]): List of melody channels.
             harmony_channel (int): Default MIDI channel for harmony events.
             harmony_channels (Optional[List[int]]): Harmony channels list.
             harmony_layer_weights (Optional[List[float]]): Per-layer weights.
             melody_range (Tuple[int, int]): Allowed melody pitch range.
             harmony_range (Tuple[int, int]): Allowed harmony pitch range.
             harmony_programs (Optional[List[int]]): Programs per layer.
-            melody_program (int): Program for melody channel.
+            melody_program (int): Program for melody channel(s).
             harmony_layer_mode (str): "deterministic" or "probabilistic".
             seed (Optional[int]): RNG seed for weighted layer selection.
         """
-        self.melody_channel = int(melody_channel)
+        self.melody_channels = self._normalize_melody_channels(melody_channels)
         self.harmony_channel = int(harmony_channel)
         self.melody_range = (
             int(melody_range[0]),
@@ -75,7 +75,7 @@ class OrchestratorAgent:
         self._family_ranges: Dict[str, Tuple[int, int]] = {}
         self._channel_ranges: Dict[int, Tuple[int, int]] = {}
         self._pending_program_changes: List[Tuple[int, int]] = []
-        self._last_melody_channel: Optional[int] = None
+        self._last_melody_channels: Optional[List[int]] = None
         self._last_melody_program: Optional[int] = None
         self._last_harmony_pairs: List[Tuple[int, int]] = []
         self._queue_program_changes(force=True)
@@ -84,9 +84,38 @@ class OrchestratorAgent:
     # Event processing
     # ------------------------------------------------------------------
 
-    def _clamp_note(self, note: int, note_range: Tuple[int, int]) -> int:
+    def _transpose_note_to_range(self, note: int, note_range: Tuple[int, int]) -> int:
+        """
+        Transpose a note by octaves until it falls within the specified range.
+
+        If the note is already in range, it is returned unchanged.
+        If it is below, it is shifted up by 12-semitone steps.
+        If it is above, it is shifted down.
+
+        Args:
+            note (int): Initial MIDI note.
+            note_range (Tuple[int, int]): (Low, High) bounds.
+
+        Returns:
+            int: Transposed note within [Low, High].
+        """
         low, high = note_range
-        return max(low, min(high, int(note)))
+        note = int(note)
+
+        # Edge case: range is invalid or too small for octave shift.
+        if low >= high:
+            return low
+        if (high - low) < 1:
+            return low
+
+        # Transpose by octaves.
+        while note < low:
+            note += 12
+        while note > high:
+            note -= 12
+
+        # Final safety clamp in case the range is smaller than an octave.
+        return max(low, min(high, note))
 
     def _prepare_event(
         self,
@@ -98,7 +127,7 @@ class OrchestratorAgent:
         prepared["channel"] = channel
         if "note" in prepared:
             resolved_range = self._resolve_range(channel, note_range)
-            prepared["note"] = self._clamp_note(
+            prepared["note"] = self._transpose_note_to_range(
                 prepared["note"],
                 resolved_range,
             )
@@ -114,27 +143,38 @@ class OrchestratorAgent:
         """
         merged: List[Dict[str, Any]] = []
 
-        # Prepare melody events with channel and range enforcement.
+        # Prepare melody events (with doubling support).
         for event in melody_events:
-            merged.append(
-                self._prepare_event(
-                    event,
-                    self.melody_channel,
-                    self.melody_range,
+            for channel in self.melody_channels:
+                merged.append(
+                    self._prepare_event(
+                        event,
+                        channel,
+                        self.melody_range,
+                    )
                 )
-            )
 
         if harmony_events:
             # Apply layer masks and weights per harmony channel.
             layer_mask = self._normalize_layer_mask(self._harmony_layer_mask)
-            for idx, (channel, weight) in enumerate(
-                zip(self.harmony_channels, self.harmony_layer_weights)
-            ):
-                if layer_mask is not None and not layer_mask[idx]:
-                    continue
-                if not self._should_emit_layer(weight):
-                    continue
-                for event in harmony_events:
+            
+            # Arpeggio/Voice distribution logic:
+            # If an event has a `voice_index`, it is assigned to a specific
+            # channel rather than being duplicated across all layers.
+            for event in harmony_events:
+                voice_index = event.get("voice_index")
+                
+                if voice_index is not None:
+                    # Distribute this specific voice to one channel.
+                    target_idx = voice_index % len(self.harmony_channels)
+                    channel = self.harmony_channels[target_idx]
+                    weight = self.harmony_layer_weights[target_idx]
+                    
+                    if layer_mask is not None and not layer_mask[target_idx]:
+                        continue
+                    if not self._should_emit_layer(weight):
+                        continue
+                        
                     merged.append(
                         self._prepare_event(
                             event,
@@ -142,6 +182,22 @@ class OrchestratorAgent:
                             self.harmony_range,
                         )
                     )
+                else:
+                    # Fallback: duplicate the event across all active layers.
+                    for idx, (channel, weight) in enumerate(
+                        zip(self.harmony_channels, self.harmony_layer_weights)
+                    ):
+                        if layer_mask is not None and not layer_mask[idx]:
+                            continue
+                        if not self._should_emit_layer(weight):
+                            continue
+                        merged.append(
+                            self._prepare_event(
+                                event,
+                                channel,
+                                self.harmony_range,
+                            )
+                        )
 
         return merged
 
@@ -154,7 +210,7 @@ class OrchestratorAgent:
         Apply parameter updates for orchestration behavior.
 
         Supported keys:
-            - melody_channel
+            - melody_channels
             - harmony_channel
             - harmony_channels
             - harmony_layer_weights
@@ -175,10 +231,10 @@ class OrchestratorAgent:
 
         program_state_changed = False
 
-        if "melody_channel" in kwargs:
-            new_val = int(kwargs["melody_channel"])
-            if new_val != self.melody_channel:
-                self.melody_channel = new_val
+        if "melody_channels" in kwargs:
+            new_val = self._normalize_melody_channels(kwargs["melody_channels"])
+            if new_val != self.melody_channels:
+                self.melody_channels = new_val
                 changed = True
                 program_state_changed = True
 
@@ -314,6 +370,18 @@ class OrchestratorAgent:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _normalize_melody_channels(
+        self,
+        channels: Optional[Iterable[int]],
+    ) -> List[int]:
+        if channels is None:
+            return [1]  # Default channel 1
+
+        normalized = [int(ch) for ch in channels]
+        if not normalized:
+            return [1]
+        return normalized
+
     def _normalize_harmony_channels(
         self,
         channels: Optional[Iterable[int]],
@@ -373,13 +441,14 @@ class OrchestratorAgent:
 
     def _queue_program_changes(self, force: bool = False) -> None:
         if force or (
-            self._last_melody_channel != self.melody_channel
+            self._last_melody_channels != self.melody_channels
             or self._last_melody_program != self.melody_program
         ):
-            self._pending_program_changes.append(
-                (self.melody_channel, self.melody_program)
-            )
-            self._last_melody_channel = self.melody_channel
+            for channel in self.melody_channels:
+                self._pending_program_changes.append(
+                    (channel, self.melody_program)
+                )
+            self._last_melody_channels = list(self.melody_channels)
             self._last_melody_program = self.melody_program
 
         harmony_pairs = self._build_harmony_program_pairs()

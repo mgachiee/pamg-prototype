@@ -377,21 +377,24 @@ class HarmonyAgent:
                 "velocity": velocity,
                 "duration": duration,
                 "source": "harmony",
+                "voice_index": idx,  # Attached for Orchestrator distribution
             }
-            for note in chord
+            for idx, note in enumerate(chord)
         ]
 
     def _build_arpeggio_event(self, duration: float) -> dict:
         if not self._arpeggio_notes:
             return {}
 
-        note = self._arpeggio_notes[self._arpeggio_step % len(self._arpeggio_notes)]
+        idx = self._arpeggio_step % len(self._arpeggio_notes)
+        note = self._arpeggio_notes[idx]
         self._arpeggio_step += 1
         return {
             "note": note,
             "velocity": self._build_velocity(is_accent=False),
             "duration": duration,
             "source": "harmony",
+            "voice_index": idx,  # Attached for Orchestrator distribution
         }
 
     def _get_template_key(self) -> str:

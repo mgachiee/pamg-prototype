@@ -15,12 +15,15 @@ from src.core.configs import (
     MELODY_PORT_NAME, 
     DRUM_PORT_NAME, 
     DEBUG_MIDI,
-    MELODY_CHANNEL,
+    MELODY_CHANNELS,
+    HARMONY_CHANNEL,
     HARMONY_CHANNELS,
     HARMONY_LAYER_WEIGHTS,
     HARMONY_LAYER_MODE,
+    CHANNEL_FAMILIES,
     MELODY_RANGE,
     HARMONY_RANGE,
+    FAMILY_RANGES,
     MELODY_PROGRAM,
     HARMONY_PROGRAMS,
     PRESET_A,
@@ -184,7 +187,7 @@ async def run_clock(
     )
     harmony_agent = HarmonyAgent(loop_size=loop_size, grain=grain)
     orchestrator_agent = OrchestratorAgent(
-        melody_channel=MELODY_CHANNEL,
+        melody_channels=MELODY_CHANNELS,
         harmony_channels=HARMONY_CHANNELS,
         harmony_layer_weights=HARMONY_LAYER_WEIGHTS,
         melody_range=MELODY_RANGE,
@@ -193,6 +196,13 @@ async def run_clock(
         melody_program=MELODY_PROGRAM,
         harmony_layer_mode=HARMONY_LAYER_MODE,
     )
+
+    # Apply instrument family range overrides if configured.
+    if FAMILY_RANGES:
+        orchestrator_agent.update_params(
+            family_ranges=FAMILY_RANGES,
+            channel_families=CHANNEL_FAMILIES,
+        )
 
     spg = SeededPhraseGenerator(base_seed=base_seed)
     _spg_prev_seed = spg.current_seed  # Track seed changes.

@@ -15,19 +15,39 @@ DRUM_PORT_NAME = "Drums 2"
 DEBUG_MIDI = False
 
 # Orchestration channels (0-based MIDI channels).
-MELODY_CHANNEL = 1
+MELODY_CHANNELS = [0, 1]
 HARMONY_CHANNEL = 2
-HARMONY_CHANNELS = [HARMONY_CHANNEL]
-HARMONY_LAYER_WEIGHTS = [1.0]
+HARMONY_CHANNELS = [2, 3, 4]
+HARMONY_LAYER_WEIGHTS = [1.0, 0.8, 0.6]
 HARMONY_LAYER_MODE = "probabilistic"
+
+# Mapping of channels to instrument families.
+# Used by OrchestratorAgent to look up ranges in FAMILY_RANGES.
+CHANNEL_FAMILIES = {
+    0: "strings",    # Melody 1
+    1: "woodwinds",  # Melody 2 (Doubling)
+    2: "keys",       # Harmony 1
+    3: "brass",      # Harmony 2
+    4: "bass",       # Harmony 3
+}
 
 # Orchestration ranges (MIDI note bounds).
 MELODY_RANGE = (48, 84)
 HARMONY_RANGE = (40, 76)
 
+# Instrument families and their typical ranges.
+# Used by OrchestratorAgent to override global ranges for specific channels.
+FAMILY_RANGES = {
+    "strings": (55, 96),
+    "brass": (48, 84),
+    "woodwinds": (60, 96),
+    "keys": (21, 108),
+    "bass": (24, 48),
+}
+
 # Orchestration programs (MIDI program numbers 0-127).
 MELODY_PROGRAM = 0
-HARMONY_PROGRAMS = [MELODY_PROGRAM]
+HARMONY_PROGRAMS = [0, 48, 19] # Piano, Strings, Organ (matching 3 harmony channels)
 
 # Percussion Template
 PERCUSSION_TEMPLATE = {
