@@ -122,6 +122,10 @@ HARMONY_TEMPLATE = {
 MAX_HEALTH = 100.0
 MAX_ENEMIES = 20.0
 
+# Temporal smoothing (slew rate) for parameter transitions in seconds.
+# Higher values make transitions more gradual and musical.
+INTERPOLATION_SMOOTHING_TIME = 3.0
+
 # Default presets (corners of the XY pad)
 # A: Exploration (calm)
 PRESET_A = Preset(
@@ -150,6 +154,7 @@ PRESET_A = Preset(
     harmony_programs=list(HARMONY_PROGRAMS),
     melody_program=int(MELODY_PROGRAM),
     harmony_layer_mode=HARMONY_LAYER_MODE,
+    scale_mode="major",
 )
 
 # B: Combat (active/aggressive)
@@ -179,6 +184,7 @@ PRESET_B = Preset(
     harmony_programs=list(HARMONY_PROGRAMS),
     melody_program=int(MELODY_PROGRAM),
     harmony_layer_mode=HARMONY_LAYER_MODE,
+    scale_mode="dorian",
 )
 
 # C: Tension (sparse/tense)
@@ -208,6 +214,7 @@ PRESET_C = Preset(
     harmony_programs=list(HARMONY_PROGRAMS),
     melody_program=int(MELODY_PROGRAM),
     harmony_layer_mode=HARMONY_LAYER_MODE,
+    scale_mode="phrygian",
 )
 
 # D: Chaotic / high-energy
@@ -237,6 +244,7 @@ PRESET_D = Preset(
     harmony_programs=list(HARMONY_PROGRAMS),
     melody_program=int(MELODY_PROGRAM),
     harmony_layer_mode=HARMONY_LAYER_MODE,
+    scale_mode="locrian",
 )
 
 DEFAULT_PRESETS = (PRESET_A, PRESET_B, PRESET_C, PRESET_D)

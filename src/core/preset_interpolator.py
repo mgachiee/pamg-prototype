@@ -105,6 +105,7 @@ class MultiParameterPresetInterpolator:
     _DISCRETE_FIELDS = {
         "melody_program",
         "harmony_layer_mode",
+        "scale_mode",
     }
 
     # List parameters that are safe to interpolate continuously element-wise

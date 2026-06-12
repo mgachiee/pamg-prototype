@@ -31,7 +31,8 @@ from src.core.configs import (
     PRESET_C,
     PRESET_D,
     MAX_HEALTH,
-    MAX_ENEMIES
+    MAX_ENEMIES,
+    INTERPOLATION_SMOOTHING_TIME
 )
 from src.core.routing import RoutingType
 from src.core.midi_io import open_midi_ports, close_midi_ports
@@ -210,7 +211,13 @@ async def run_clock(
     last_chord_pool = harmony_agent.get_chord_pool()
 
     # Initialize the XY pad preset interpolator.
-    interpolator = MultiParameterPresetInterpolator(PRESET_A, PRESET_B, PRESET_C, PRESET_D, smoothing_time=0.12)
+    interpolator = MultiParameterPresetInterpolator(
+        PRESET_A, 
+        PRESET_B, 
+        PRESET_C, 
+        PRESET_D, 
+        smoothing_time=INTERPOLATION_SMOOTHING_TIME
+    )
 
     # ------------------------------------------------------------------
     # MIDI port initialization
@@ -336,6 +343,7 @@ async def run_clock(
                     "health": round(player_health, 2),
                     "enemies": round(enemy_count, 2),
                     "xy": {"x": round(x, 3), "y": round(y, 3)},
+                    "scale_mode": last_discrete_params.scale_mode,
                     "melody_pitch": [
                         int(round(params.melody_pitch_low)),
                         int(round(params.melody_pitch_high)),
@@ -349,9 +357,9 @@ async def run_clock(
             # ------------------------------------------------------------------
             # Agent parameter updates
             # ------------------------------------------------------------------
-            # Only update agents if parameters have changed significantly,
-            # or at phrase boundaries to ensure consistency.
-            if tick == 0 or phrase_start or interpolator.smoothing_time > 0:
+            # Update parameters on the downbeat (subdivision 0) to ensure
+            # rhythm and density changes don't happen mid-beat.
+            if tick == 0 or phrase_start or (subdivision == 0 and interpolator.smoothing_time > 0):
                 melody_agent.update_params(
                     max_step=max(1, int(round(params.melody_max_step))),
                     pitch_range=(
@@ -397,6 +405,7 @@ async def run_clock(
                     harmony_add_probability=float(params.harmony_add_probability),
                     harmony_sub_probability=float(params.harmony_sub_probability),
                     harmony_accent_probability=float(params.harmony_accent_probability),
+                    scale_mode=last_discrete_params.scale_mode,
                 )
 
             # ------------------------------------------------------------------

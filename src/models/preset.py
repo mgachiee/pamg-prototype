@@ -43,3 +43,4 @@ class Preset:
     harmony_programs: List[int]
     melody_program: int
     harmony_layer_mode: str
+    scale_mode: str

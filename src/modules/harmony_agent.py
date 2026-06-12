@@ -431,9 +431,19 @@ class HarmonyAgent:
         return self._build_scale_for_mode(self.scale_mode)
 
     def _build_scale_for_mode(self, mode: str) -> List[int]:
-        if mode == "minor":
+        mode = mode.lower()
+        if mode in ("minor", "aeolian"):
             steps = [0, 2, 3, 5, 7, 8, 10]
+        elif mode == "dorian":
+            steps = [0, 2, 3, 5, 7, 9, 10]
+        elif mode == "phrygian":
+            steps = [0, 1, 3, 5, 7, 8, 10]
+        elif mode == "locrian":
+            steps = [0, 1, 3, 5, 6, 8, 10]
+        elif mode == "lydian":
+            steps = [0, 2, 4, 6, 7, 9, 11]
         else:
+            # Default to major/ionian
             steps = [0, 2, 4, 5, 7, 9, 11]
 
         return [self.key_root + step for step in steps]
@@ -499,7 +509,9 @@ class HarmonyAgent:
             for degree in range(1, len(self._scale_degrees) + 1)
         }
 
-        parallel_mode = "minor" if self.scale_mode == "major" else "major"
+        # Simplified borrowed chord logic: flip between major/minor base
+        is_minor_like = self.scale_mode.lower() in ("minor", "aeolian", "dorian", "phrygian", "locrian")
+        parallel_mode = "major" if is_minor_like else "minor"
         parallel_scale = self._build_scale_for_mode(parallel_mode)
         self.borrowed_chord_dictionary = {
             degree: self._build_triad_from_scale(parallel_scale, degree)
@@ -532,7 +544,9 @@ class HarmonyAgent:
         self._degree_index = 0
 
     def _progression_rules(self) -> List[tuple]:
-        if self.scale_mode == "minor":
+        is_minor_like = self.scale_mode.lower() in ("minor", "aeolian", "dorian", "phrygian", "locrian")
+        
+        if is_minor_like:
             return [
                 (
                     0.0,
