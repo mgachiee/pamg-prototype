@@ -436,6 +436,34 @@ class PercussionAgent:
         self.subfills = subfills
         return subfills
 
+    def get_lookahead(self, current_tick: int, lookahead_ticks: int) -> List[int]:
+        """
+        Query upcoming percussion onsets (of any instrument) within a window.
+
+        Args:
+            current_tick (int): Starting index for the query.
+            lookahead_ticks (int): Number of ticks to look ahead.
+
+        Returns:
+            List[int]: Relative indices (within the window) of planned onsets.
+        """
+        onsets = []
+        for i in range(lookahead_ticks):
+            idx = (current_tick + i) % self.total_pulses
+            # Check precomputed subfills (which include fills and ratchets)
+            if self.subfills.get(idx):
+                onsets.append(i)
+                continue
+            
+            # Check base grid pattern
+            beat = idx // self.grain
+            subdivision = idx % self.grain
+            states = self._accent_beat_follower(beat, subdivision)
+            if any(states):
+                onsets.append(i)
+
+        return onsets
+
     # ------------------------------------------------------------------
     # Parameter updates
     # ------------------------------------------------------------------

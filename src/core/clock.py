@@ -36,7 +36,7 @@ from src.core.configs import (
 )
 from src.core.routing import RoutingType
 from src.core.midi_io import open_midi_ports, close_midi_ports
-from src.core.players import play_note, play_ratchet
+from src.core.players import play_note, play_ratchet, send_cc
 from src.core.midi_events import normalize_event
 from src.core.scheduler import TaskManager
 from src.modules.percussion_agent import PercussionAgent
@@ -424,6 +424,10 @@ async def run_clock(
 
             if phrase_start:
                 await _send_program_changes(mel_queue)
+
+            # Dispatch Control Change (CC) messages for volume/expression.
+            for ch, cc, val in orchestrator_agent.consume_cc_changes():
+                await send_cc(mel_queue, cc, val, channel=ch)
 
             # ------------------------------------------------------------------
             # Chord + seed updates

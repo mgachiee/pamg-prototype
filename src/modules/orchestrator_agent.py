@@ -75,10 +75,12 @@ class OrchestratorAgent:
         self._family_ranges: Dict[str, Tuple[int, int]] = {}
         self._channel_ranges: Dict[int, Tuple[int, int]] = {}
         self._pending_program_changes: List[Tuple[int, int]] = []
+        self._pending_cc_changes: List[Tuple[int, int, int]] = []  # (channel, cc, value)
         self._last_melody_channels: Optional[List[int]] = None
         self._last_melody_program: Optional[int] = None
         self._last_harmony_pairs: List[Tuple[int, int]] = []
         self._queue_program_changes(force=True)
+        self._queue_cc_changes(force=True)
 
     # ------------------------------------------------------------------
     # Event processing
@@ -172,7 +174,10 @@ class OrchestratorAgent:
                     
                     if layer_mask is not None and not layer_mask[target_idx]:
                         continue
-                    if not self._should_emit_layer(weight):
+                    
+                    # Instead of probabilistic note-dropping, we use a 
+                    # threshold check for polyphony conservation.
+                    if weight < 0.05:
                         continue
                         
                     merged.append(
@@ -189,7 +194,7 @@ class OrchestratorAgent:
                     ):
                         if layer_mask is not None and not layer_mask[idx]:
                             continue
-                        if not self._should_emit_layer(weight):
+                        if weight < 0.05:
                             continue
                         merged.append(
                             self._prepare_event(
@@ -362,6 +367,15 @@ class OrchestratorAgent:
         self._pending_program_changes.clear()
         return changes
 
+    def consume_cc_changes(self) -> List[Tuple[int, int, int]]:
+        """
+        Return and clear pending Control Change (CC) messages.
+        Format: (channel, control_number, value)
+        """
+        changes = list(self._pending_cc_changes)
+        self._pending_cc_changes.clear()
+        return changes
+
     def on_phrase_start(self) -> None:
         """Force a program-change snapshot at phrase boundaries."""
         self._queue_program_changes(force=True)
@@ -456,6 +470,18 @@ class OrchestratorAgent:
             self._pending_program_changes.extend(harmony_pairs)
             self._last_harmony_pairs = list(harmony_pairs)
 
+    def _queue_cc_changes(self, force: bool = False) -> None:
+        """Queue Expression (CC 11) messages based on layer weights."""
+        # CC 11 is Expression; mapped from weight [0, 1] to [0, 127]
+        EXPRESSION_CC = 11
+        for idx, (channel, weight) in enumerate(
+            zip(self.harmony_channels, self.harmony_layer_weights)
+        ):
+            cc_value = int(round(weight * 127))
+            self._pending_cc_changes.append(
+                (int(channel), EXPRESSION_CC, cc_value)
+            )
+
     def _build_harmony_program_pairs(self) -> List[Tuple[int, int]]:
         if not self.harmony_channels:
             return []
@@ -494,15 +520,6 @@ class OrchestratorAgent:
 
     def _clamp_weight(self, value: float) -> float:
         return max(0.0, min(1.0, float(value)))
-
-    def _should_emit_layer(self, weight: float) -> bool:
-        if self.harmony_layer_mode == "deterministic":
-            return weight > 0.0
-        if weight >= 1.0:
-            return True
-        if weight <= 0.0:
-            return False
-        return self._rng.random() < weight
 
     def _resolve_range(
         self,

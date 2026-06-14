@@ -2,11 +2,44 @@
 
 import asyncio
 import mido
-from typing import Any
+from typing import Any, Optional
 
 
 # ---------------------------------------------------------------------------
-# Message dispatch
+# Control messages
+# ---------------------------------------------------------------------------
+
+async def send_cc(
+    queue: Optional[asyncio.Queue],
+    control: int,
+    value: int,
+    channel: int = 0,
+) -> None:
+    """
+    Queue a MIDI Control Change (CC) message.
+
+    Args:
+        queue (asyncio.Queue): The async MIDI queue to push to.
+        control (int): The MIDI controller number (0-127).
+        value (int): The controller value (0-127).
+        channel (int): MIDI channel (0-indexed).
+    """
+    if queue is None:
+        return
+    try:
+        msg = mido.Message(
+            "control_change",
+            control=int(control),
+            value=int(value),
+            channel=int(channel),
+        )
+        await queue.put(msg)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Multi-note helpers
 # ---------------------------------------------------------------------------
 
 # ------------------------------------------------------------------
