@@ -11,6 +11,13 @@ class Preset:
     Each field represents a parameter used by the interpolator or the agents.
     Continuous fields are blended across presets, while discrete fields are
     snapped at phrase boundaries (see `core/preset_interpolator.py`).
+
+    The system uses four presets (A, B, C, D) mapped to Russell's Circumplex
+    Model of Affect:
+        - A: Quadrant 1 (Excited / High Arousal, Positive Valence)
+        - B: Quadrant 2 (Angry / High Arousal, Negative Valence)
+        - C: Quadrant 3 (Sad / Low Arousal, Negative Valence)
+        - D: Quadrant 4 (Calm / Low Arousal, Positive Valence)
     """
     melody_max_step: float
     melody_pitch_low: float
