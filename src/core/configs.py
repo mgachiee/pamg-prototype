@@ -128,6 +128,7 @@ INTERPOLATION_SMOOTHING_TIME = 3.0
 
 # Default presets (corners of the XY pad)
 # A: Quadrant 1 (Excited / High Arousal, Positive Valence)
+# Health is high, few enemies, player is doing well - music should be energetic, bright, and uplifting.
 PRESET_A = Preset(
     melody_max_step=6.0,
     melody_pitch_low=60.0,
@@ -157,7 +158,8 @@ PRESET_A = Preset(
     scale_mode="lydian",
 )
 
-# B: Quadrant 2 (Angry / High Arousal, Negative Valence)
+# B: Quadrant 2 (Angry / High Arousal, Negative Valence)\
+# Health is low, many enemies, player is struggling - music should be aggressive, tense, and dissonant.
 PRESET_B = Preset(
     melody_max_step=8.0,
     melody_pitch_low=40.0,
@@ -188,6 +190,7 @@ PRESET_B = Preset(
 )
 
 # C: Quadrant 3 (Sad / Low Arousal, Negative Valence)
+# Health is low but player is surviving, or health is high but many enemies - music should be subdued, minor key, with a sense of struggle but also hope.
 PRESET_C = Preset(
     melody_max_step=2.0,
     melody_pitch_low=36.0,
@@ -218,6 +221,7 @@ PRESET_C = Preset(
 )
 
 # D: Quadrant 4 (Calm / Low Arousal, Positive Valence)
+# Health is high but many enemies, or health is low but few enemies - music should be calm, consonant, with a sense of resilience and determination.
 PRESET_D = Preset(
     melody_max_step=3.0,
     melody_pitch_low=55.0,
