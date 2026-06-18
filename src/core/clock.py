@@ -91,11 +91,11 @@ def map_gamevars_to_xy(
     max_enemies: float = MAX_ENEMIES,
 ) -> Tuple[float, float]:
     """
-    Map raw game-state values to normalized XY coordinates.
+    Map raw game-state values to normalized XY coordinates (Valence/Arousal).
 
-    Health is inverted so low health drives higher X (more tension), while
-    enemy count pushes Y upward. Both axes are clamped to [0, 1] and
-    softened with a power curve for smoother control near zero.
+    Valence (X) is driven by health (high health = positive valence).
+    Arousal (Y) is driven by enemy count (high count = high arousal).
+    Both axes are clamped to [0, 1] and softened with a power curve.
 
     Args:
         player_health (float): Raw health value (0..max_health).
@@ -109,7 +109,9 @@ def map_gamevars_to_xy(
     health_norm = clamp(player_health / max_health)
     enemy_norm = clamp(enemy_count / max_enemies)
 
-    x = clamp(1.0 - health_norm)
+    # Valence (X): 0.0 = Negative, 1.0 = Positive
+    x = clamp(health_norm)
+    # Arousal (Y): 0.0 = Low, 1.0 = High
     y = clamp(enemy_norm)
 
     x = x ** 1.5
@@ -211,6 +213,11 @@ async def run_clock(
     last_chord_pool = harmony_agent.get_chord_pool()
 
     # Initialize the XY pad preset interpolator.
+    # Layout (Valence, Arousal):
+    # a (0,0) -> Q3 (-V, -A) -> Sad (Preset A)
+    # b (1,0) -> Q4 (+V, -A) -> Calm (Preset B)
+    # c (0,1) -> Q2 (-V, +A) -> Angry (Preset C)
+    # d (1,1) -> Q1 (+V, +A) -> Excited (Preset D)
     interpolator = MultiParameterPresetInterpolator(
         PRESET_A, 
         PRESET_B, 

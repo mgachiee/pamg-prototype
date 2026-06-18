@@ -296,7 +296,7 @@ class MultiParameterPresetInterpolator:
         weights = (w00, w10, w01, w11)
 
         logger.debug(
-            f"Blending weights: A={w00:.2f}, B={w10:.2f}, C={w01:.2f}, D={w11:.2f}"
+            f"Blending weights: (0,0)={w00:.2f}, (1,0)={w10:.2f}, (0,1)={w01:.2f}, (1,1)={w11:.2f}"
         )
 
         return Preset(
