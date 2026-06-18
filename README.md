@@ -46,6 +46,16 @@ For details on the specific implementation rules and architectural refinements a
     python main.py
     ```
 
+## Offline MIDI Dataset Generation
+
+PAMG includes a tool for bulk generating MIDI files from the four corner presets. This is useful for creating datasets for training or for generating static musical assets.
+
+*   **Generate Dataset**:
+    ```bash
+    python generate_dataset.py
+    ```
+    This will generate 25 MIDI files for each preset (A, B, C, D) and save them in the `dataset/` directory. Each file represents a unique seeded variation of the preset's musical character.
+
 ## Multi-Channel Configuration
 
 PAMG supports sophisticated multi-instrument setups. Configuration is centralized in `src/core/configs.py`.

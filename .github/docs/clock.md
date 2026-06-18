@@ -51,7 +51,18 @@ See `system-architecture.md` for the end-to-end data flow and constraints.
 - Update agent parameters and trigger loop/phrase hooks.
 - Update shared seeds on chord pool changes (Pool 1 gate).
 - Dispatch MIDI events to output ports via async writers.
+- **Task Management:** Tracks all scheduled asynchronous MIDI tasks (e.g., note-off timers) to ensure they are properly cleaned up and don't cause resource leaks.
 - Ensure clean shutdown and flush of pending note tasks.
+
+---
+
+## Task Tracking (`TaskManager`)
+
+The clock utilizes a `TaskManager` (from `src.core.scheduler`) to manage the lifecycle of asynchronous MIDI events.
+
+*   **Registration:** Every time a MIDI event with a duration (like a Note On) is scheduled, the resulting task is registered with the `TaskManager`.
+*   **Automatic Cleanup:** The manager uses `done_callbacks` to automatically discard tasks once they complete.
+*   **Shutdown Coordination:** During system shutdown, the clock calls `cancel_all_tasks()` to immediately stop all pending MIDI operations and timers, ensuring a clean exit.
 
 ---
 

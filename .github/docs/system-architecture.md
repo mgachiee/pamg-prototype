@@ -414,7 +414,7 @@ Both output streams are routed to one or more MIDI ports (virtual synths, soft i
 | Melody Agent | `modules/melody_agent.py` |
 | Harmony Agent | `modules/harmony_agent.py` |
 | Percussion Agent | `modules/percussion_agent.py` |
-| Orchestration Agent | `core/orchestration/` (or equivalent) |
+| Orchestration Agent | `modules/orchestrator_agent.py` |
 
 > File paths are implementation-defined and may evolve. The module boundaries above are authoritative; the file paths are not.
 

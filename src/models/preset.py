@@ -14,10 +14,10 @@ class Preset:
 
     The system uses four presets (A, B, C, D) mapped to Russell's Circumplex
     Model of Affect:
-        - A: Quadrant 1 (Excited / High Arousal, Positive Valence)
-        - B: Quadrant 2 (Angry / High Arousal, Negative Valence)
-        - C: Quadrant 3 (Sad / Low Arousal, Negative Valence)
-        - D: Quadrant 4 (Calm / Low Arousal, Positive Valence)
+        - A: Quadrant 3 (Sad / Low Arousal, Negative Valence)
+        - B: Quadrant 4 (Calm / Low Arousal, Positive Valence)
+        - C: Quadrant 2 (Angry / High Arousal, Negative Valence)
+        - D: Quadrant 1 (Excited / High Arousal, Positive Valence)
     """
     melody_max_step: float
     melody_pitch_low: float

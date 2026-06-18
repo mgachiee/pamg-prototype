@@ -33,6 +33,17 @@ See `system-architecture.md` for orchestration responsibilities.
 - Clamp notes to configured pitch ranges.
 - Manage program changes at phrase boundaries.
 - Apply layer weights and optional layer masks.
+- **Instrument Family Range Enforcement:** Applies specific pitch bounds based on the instrument type (e.g., Flute vs. Bass) to ensure realistic performance.
+
+---
+
+## Instrument Families & Range Enforcement
+
+The Orchestration Agent uses a hierarchical range enforcement system:
+
+1.  **Global Ranges:** Defaults are defined by `MELODY_RANGE` and `HARMONY_RANGE`.
+2.  **Family Ranges:** If a MIDI channel is mapped to a family in `CHANNEL_FAMILIES`, the agent looks up the specific bounds in `FAMILY_RANGES` (e.g., "strings": (55, 96)).
+3.  **Octave Transposition:** Instead of clipping out-of-range notes, the agent shifts them by octaves until they fit within the target instrument's range, preserving their harmonic identity.
 
 ---
 

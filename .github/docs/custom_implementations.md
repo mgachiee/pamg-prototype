@@ -18,10 +18,10 @@ While the original study discusses parameter snapshots, this implementation uses
 
 The four corner presets (A, B, C, D) are explicitly mapped to the quadrants of Russell's Circumplex Model of Affect (Valence and Arousal):
 
-*   **Preset A (Q1: Excited):** High Arousal, Positive Valence. Uses **Lydian** mode, high syncopation, and dense rhythms.
-*   **Preset B (Q2: Angry):** High Arousal, Negative Valence. Uses **Locrian** mode, aggressive ratchets, and high tension.
-*   **Preset C (Q3: Sad):** Low Arousal, Negative Valence. Uses **Aeolian** mode, sparse rhythms, and low pitch ranges.
-*   **Preset D (Q4: Calm):** Low Arousal, Positive Valence. Uses **Major (Ionian)** mode, zero tension, and flowing legato movement.
+*   **Preset A (Q3: Sad):** Low Arousal, Negative Valence. Uses **Aeolian** mode, sparse rhythms, and low pitch ranges.
+*   **Preset B (Q4: Calm):** Low Arousal, Positive Valence. Uses **Major (Ionian)** mode, zero tension, and flowing legato movement.
+*   **Preset C (Q2: Angry):** High Arousal, Negative Valence. Uses **Locrian** mode, aggressive ratchets, and high tension.
+*   **Preset D (Q1: Excited):** High Arousal, Positive Valence. Uses **Lydian** mode, high syncopation, and dense rhythms.
 
 This mapping ensures that the "tension" axis of the original study corresponds to a well-established psychological framework.
 
