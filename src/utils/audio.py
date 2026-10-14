@@ -129,3 +129,68 @@ def use_highres_timer(mode: str = "enable") -> None:
         except Exception as e:
             # Non-fatal if timer resolution cannot be altered
             pass
+
+
+_WINDOWS_JOB_OBJECT = None
+
+
+def bind_subprocess_to_parent_lifecycle(process) -> None:
+    """
+    Ensure the child process automatically terminates when the parent process exits.
+    On Windows, associates the child process with a Win32 Job Object configured with
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000), guaranteeing kernel-level termination
+    even if the parent process crashes or terminates abruptly.
+    """
+    global _WINDOWS_JOB_OBJECT
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            if _WINDOWS_JOB_OBJECT is None:
+                job = kernel32.CreateJobObjectW(None, None)
+                if job:
+                    class IO_COUNTERS(ctypes.Structure):
+                        _fields_ = [
+                            ("ReadOperationCount", ctypes.c_uint64),
+                            ("WriteOperationCount", ctypes.c_uint64),
+                            ("OtherOperationCount", ctypes.c_uint64),
+                            ("ReadTransferCount", ctypes.c_uint64),
+                            ("WriteTransferCount", ctypes.c_uint64),
+                            ("OtherTransferCount", ctypes.c_uint64),
+                        ]
+
+                    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+                        _fields_ = [
+                            ("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", ctypes.c_uint32),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", ctypes.c_uint32),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", ctypes.c_uint32),
+                            ("SchedulingClass", ctypes.c_uint32),
+                        ]
+
+                    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+                        _fields_ = [
+                            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                            ("IoInfo", IO_COUNTERS),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryLimit", ctypes.c_size_t),
+                            ("PeakJobMemoryLimit", ctypes.c_size_t),
+                        ]
+
+                    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+                    info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                    kernel32.SetInformationJobObject(
+                        job, 9, ctypes.byref(info), ctypes.sizeof(info)
+                    )
+                    _WINDOWS_JOB_OBJECT = job
+
+            if _WINDOWS_JOB_OBJECT and hasattr(process, "_handle") and process._handle:
+                kernel32.AssignProcessToJobObject(_WINDOWS_JOB_OBJECT, int(process._handle))
+        except Exception:
+            pass
+

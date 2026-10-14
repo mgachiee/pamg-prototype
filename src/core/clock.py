@@ -316,6 +316,18 @@ async def run_clock(
             mel_writer_task = asyncio.create_task(_midi_writer(port_mel, mel_queue))
             perc_writer_task = asyncio.create_task(_midi_writer(port_perc, perc_queue))
 
+        # Register immediate silence callback on game_state so TCP disconnect or pause
+        # can silence synth output immediately without waiting for clock pulses.
+        def _immediate_silence():
+            scheduled_tasks.cancel_all_tasks()
+            if hasattr(port_mel, "panic"):
+                port_mel.panic()
+            if hasattr(port_perc, "panic") and port_perc is not port_mel:
+                port_perc.panic()
+
+        if game_state is not None:
+            game_state.silence_callbacks.append(_immediate_silence)
+
         async def _send_program_changes(
             queue: Optional[asyncio.Queue],
         ) -> None:
@@ -418,6 +430,10 @@ async def run_clock(
                         await asyncio.sleep(0.05)
                     next_pulse_time = running_loop.time()
                     if game_state.is_alive and not game_state.shutdown_requested:
+                        if hasattr(port_mel, "resume"):
+                            port_mel.resume()
+                        if hasattr(port_perc, "resume") and port_perc is not port_mel:
+                            port_perc.resume()
                         await _send_program_changes(mel_queue)
                         await _send_cc_changes(mel_queue)
 
@@ -786,6 +802,9 @@ async def run_clock(
         # ------------------------------------------------------------------
         # Cancel any scheduled note/chord tasks immediately
         scheduled_tasks.cancel_all_tasks()
+
+        if game_state is not None and "_immediate_silence" in locals() and _immediate_silence in game_state.silence_callbacks:
+            game_state.silence_callbacks.remove(_immediate_silence)
 
         # Send silence and pedal release
         try:

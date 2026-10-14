@@ -158,7 +158,7 @@ class PacketHandler:
     def _handle_pause(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Pause the engine clock."""
         logger.info("[PacketHandler] Pause requested.")
-        self.state.paused = True
+        self.state.trigger_silence()
         return {"status": "paused", "engine_state": "paused"}
 
     def _handle_resume(self, packet: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,12 +170,13 @@ class PacketHandler:
     def _handle_stop(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Stop and pause playback."""
         logger.info("[PacketHandler] Stop requested.")
-        self.state.paused = True
+        self.state.trigger_silence()
         return {"status": "stopped", "engine_state": "paused"}
 
     def _handle_reset(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Reset engine state to defaults."""
         logger.info("[PacketHandler] Reset requested.")
+        self.state.trigger_silence()
         self.state.reset()
         return {
             "status": "ok",
@@ -183,6 +184,7 @@ class PacketHandler:
             "measure": self.state.measure,
             "current_step": self.state.current_step,
         }
+
 
     def _handle_status(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Report live engine status."""

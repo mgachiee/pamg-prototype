@@ -177,3 +177,48 @@ def test_fluidsynth_send_commands(mock_popen):
     port.send(mido.Message("control_change", channel=2, control=91, value=85))
     cc_written = mock_stdin.write.call_args_list[0][0][0].decode("utf-8")
     assert cc_written == "cc 2 91 85\n"
+
+
+@patch("subprocess.Popen")
+def test_fluidsynth_panic_and_resume(mock_popen):
+    """Verify panic() tracks active notes, cuts gain and volumes, releases pedals, and resume() restores gain."""
+    mock_stdin = MagicMock()
+    mock_proc = MagicMock()
+    mock_proc.stdin = mock_stdin
+    mock_popen.return_value = mock_proc
+
+    port = NativeFluidSynthPort("dummy.sf2", audio_driver="dsound", config={"master_gain": 0.70})
+
+    # Send note on (should be tracked in active_notes)
+    port.send(mido.Message("note_on", channel=1, note=64, velocity=90))
+    assert (1, 64) in port.active_notes
+
+    # Call panic
+    mock_stdin.reset_mock()
+    port.panic()
+
+    writes = [call[0][0].decode("utf-8") for call in mock_stdin.write.call_args_list]
+    # Verify gain cut
+    assert "gain 0\n" in writes
+    # Verify channel volume cut and sustain pedal release
+    assert "cc 1 7 0\n" in writes
+    assert "cc 1 64 0\n" in writes
+    # Verify explicit noteoff for tracked active note
+    assert "noteoff 1 64\n" in writes
+    assert "reset\n" in writes
+    assert len(port.active_notes) == 0
+
+    # Call resume
+    mock_stdin.reset_mock()
+    port.resume()
+    resume_writes = [call[0][0].decode("utf-8") for call in mock_stdin.write.call_args_list]
+    assert "gain 0.700\n" in resume_writes
+
+
+def test_bind_subprocess_lifecycle():
+    """Verify bind_subprocess_to_parent_lifecycle runs safely."""
+    from src.utils.audio import bind_subprocess_to_parent_lifecycle
+    dummy_proc = MagicMock()
+    dummy_proc._handle = None
+    bind_subprocess_to_parent_lifecycle(dummy_proc)
+

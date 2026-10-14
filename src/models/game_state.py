@@ -2,8 +2,8 @@
 GameState model for external game engine integration over TCP socket.
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List, Callable, Any
 
 from src.models.time_signature import TimeSignature
 
@@ -49,6 +49,19 @@ class GameState:
     measure: int = 0
     step_in_measure: int = 0
     time_signature: str = "4/4"
+    silence_callbacks: List[Callable[[], Any]] = field(default_factory=list)
+
+    def trigger_silence(self) -> None:
+        """
+        Immediately pause playback and trigger all registered silence/panic callbacks.
+        Guarantees instant silence on client disconnect or pause without waiting for clock ticks.
+        """
+        self.paused = True
+        for cb in list(self.silence_callbacks):
+            try:
+                cb()
+            except Exception:
+                pass
 
     def set_valence_arousal(self, valence: float, arousal: float) -> None:
         """

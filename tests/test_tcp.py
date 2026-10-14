@@ -343,3 +343,32 @@ def test_tcp_client_disconnect_sidecar_shuts_down_cleanly(dummy_port):
 
     asyncio.run(_main())
 
+
+def test_tcp_client_disconnect_triggers_silence_non_sidecar():
+    """Verify that in non-sidecar mode, client disconnection immediately triggers state.trigger_silence()."""
+    state = GameState()
+    silence_invoked = []
+    state.silence_callbacks.append(lambda: silence_invoked.append(True))
+
+    async def _main():
+        server = await start_tcp_server(host="127.0.0.1", port=9098, state=state, sidecar=False)
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9098)
+            writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
+            await writer.drain()
+            resp = json.loads((await reader.readline()).decode("utf-8"))
+            assert resp["status"] == "ok"
+            assert state.paused is False
+
+            # Disconnect client
+            writer.close()
+            await writer.wait_closed()
+            # Allow server task loop to process disconnect
+            await asyncio.sleep(0.05)
+
+        assert len(silence_invoked) >= 1
+        assert state.paused is True
+
+    asyncio.run(_main())
+
+

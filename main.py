@@ -51,7 +51,13 @@ async def main() -> None:
     parser.add_argument("--routing", default="single_port", choices=["single_port", "split_ports"], help="MIDI routing mode")
     parser.add_argument("--sf2", type=str, default=None, help="Path to .sf2 file to embed FluidSynth directly and bypass MIDI ports")
     parser.add_argument("--audio-driver", type=str, default=None, help="FluidSynth audio driver (wasapi, dsound, pulseaudio, coreaudio)")
-    parser.add_argument("--sidecar", action="store_true", help="Auto-terminate server process when client disconnects")
+    parser.add_argument(
+        "--sidecar", 
+        action="store_true", 
+        default=os.environ.get("PAMG_SIDECAR", "").lower() in ("1", "true", "yes"),
+        help="Auto-terminate server process when client disconnects (or set PAMG_SIDECAR=1)"
+    )
+
 
     args = parser.parse_args()
     routing_mode = RoutingType(args.routing)

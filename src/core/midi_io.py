@@ -60,6 +60,12 @@ class NativeFluidSynthPort:
             stderr=subprocess.DEVNULL
         )
         self.closed = False
+        self.gain = gain
+        self.active_notes = set()
+
+        from src.utils.audio import bind_subprocess_to_parent_lifecycle
+        bind_subprocess_to_parent_lifecycle(self.process)
+
         atexit.register(self.close)
         self.audio_driver = audio_driver
         self.v_floor = int(self.config.get("velocity_floor", 15))
@@ -95,13 +101,16 @@ class NativeFluidSynthPort:
             if msg.type == 'note_on':
                 # FluidSynth convention: velocity 0 is note_off
                 if msg.velocity == 0:
+                    self.active_notes.discard((msg.channel, msg.note))
                     cmd = f"noteoff {msg.channel} {msg.note}\n"
                 else:
+                    self.active_notes.add((msg.channel, msg.note))
                     shaped_vel = self._shape_velocity(msg.velocity)
                     cmd = f"noteon {msg.channel} {msg.note} {shaped_vel}\n"
                 self.process.stdin.write(cmd.encode('utf-8'))
                 self.process.stdin.flush()
             elif msg.type == 'note_off':
+                self.active_notes.discard((msg.channel, msg.note))
                 cmd = f"noteoff {msg.channel} {msg.note}\n"
                 self.process.stdin.write(cmd.encode('utf-8'))
                 self.process.stdin.flush()
@@ -123,16 +132,40 @@ class NativeFluidSynthPort:
             pass
 
     def panic(self):
-        """Immediately silence all voices, release pedals, and reset controllers in FluidSynth."""
+        """Immediately silence all voices, cut master gain and channel volumes, and reset FluidSynth."""
         if self.closed or not self.process or not self.process.stdin:
             return
         try:
+            # 1. Master gain cut to instantly silence all active sound and reverb delay lines
+            self.process.stdin.write(b"gain 0\n")
+
+            # 2. Cut channel volume and expression, release sustain and sostenuto pedals
             for ch in range(16):
+                self.process.stdin.write(f"cc {ch} 7 0\n".encode("utf-8"))
+                self.process.stdin.write(f"cc {ch} 11 0\n".encode("utf-8"))
                 self.process.stdin.write(f"cc {ch} 64 0\n".encode("utf-8"))
                 self.process.stdin.write(f"cc {ch} 66 0\n".encode("utf-8"))
                 self.process.stdin.write(f"cc {ch} 123 0\n".encode("utf-8"))
                 self.process.stdin.write(f"cc {ch} 120 0\n".encode("utf-8"))
+
+            # 3. Explicit noteoff for all actively tracked sounding notes
+            for ch, note in list(self.active_notes):
+                self.process.stdin.write(f"noteoff {ch} {note}\n".encode("utf-8"))
+            self.active_notes.clear()
+
+            # 4. System reset
             self.process.stdin.write(b"reset\n")
+            self.process.stdin.flush()
+        except Exception:
+            pass
+
+    def resume(self):
+        """Restore master gain when playback resumes."""
+        if self.closed or not self.process or not self.process.stdin:
+            return
+        try:
+            gain = float(self.config.get("master_gain", 0.65))
+            self.process.stdin.write(f"gain {gain:.3f}\n".encode("utf-8"))
             self.process.stdin.flush()
         except Exception:
             pass
@@ -145,6 +178,10 @@ class NativeFluidSynthPort:
                 if self.process and self.process.stdin:
                     self.process.stdin.write(b"quit\n")
                     self.process.stdin.flush()
+                    try:
+                        self.process.stdin.close()
+                    except Exception:
+                        pass
                 self.process.terminate()
                 self.process.wait(timeout=1)
             except Exception:
@@ -153,6 +190,7 @@ class NativeFluidSynthPort:
                         self.process.kill()
                 except Exception:
                     pass
+
 
 
 # ------------------------------------------------------------------

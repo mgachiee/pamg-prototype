@@ -81,6 +81,9 @@ async def handle_client(
         except Exception:
             pass
 
+        # Immediately pause and silence all audio ports and active notes
+        state.trigger_silence()
+
         if packet_handler.shutdown_requested or packet_handler.sidecar_mode:
             logger.info("[TCP Server] Client session finished in sidecar/shutdown mode. Stopping server.")
             state.shutdown_requested = True
