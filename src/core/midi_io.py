@@ -24,11 +24,14 @@ class NativeFluidSynthPort:
             if audio_driver == "unknown":
                 audio_driver = "dsound"
 
+        from src.utils.audio import get_fluidsynth_binary
+        fs_bin = get_fluidsynth_binary()
+
         from src.core.configs import AUDIO_CONFIG
         cfg = config if config is not None else audio_config
         self.config = dict(cfg) if cfg is not None else dict(AUDIO_CONFIG)
 
-        cmd = ["fluidsynth", "-n", "-a", audio_driver]
+        cmd = [fs_bin, "-n", "-a", audio_driver]
 
         # Configure Master Gain Headroom
         gain = float(self.config.get("master_gain", 0.65))
