@@ -3,7 +3,7 @@ import pytest
 
 from src.core.midi_events import normalize_event
 from src.core.midi_io import close_midi_ports
-from src.core.players import play_note, play_ratchet, play_arpeggio
+from src.core.players import play_note, play_ratchet, play_arpeggio, silence_all_notes
 
 
 def test_normalize_event_clamping():
@@ -106,3 +106,30 @@ def test_players_ratchet_crescendo_velocity(dummy_port):
     assert velocities[-1] == 100
     assert velocities == sorted(velocities)
     assert len(set(velocities)) == 4
+
+
+def test_silence_all_notes(dummy_port):
+    """Verify silence_all_notes sends pedal release and all notes/sound off."""
+    asyncio.run(silence_all_notes(dummy_port, channels=[0, 1]))
+
+    ccs = [(m.channel, m.control, m.value) for m in dummy_port.messages if m.type == "control_change"]
+    # Channel 0
+    assert (0, 64, 0) in ccs   # Sustain pedal release
+    assert (0, 66, 0) in ccs   # Sostenuto release
+    assert (0, 123, 0) in ccs  # All Notes Off
+    assert (0, 120, 0) in ccs  # All Sound Off
+
+    # Channel 1
+    assert (1, 64, 0) in ccs
+    assert (1, 66, 0) in ccs
+    assert (1, 123, 0) in ccs
+    assert (1, 120, 0) in ccs
+
+
+def test_close_midi_ports_sends_panic(dummy_port):
+    """Verify close_midi_ports dispatches panic controllers before closing."""
+    close_midi_ports(dummy_port)
+    assert dummy_port.closed is True
+    ccs = [(m.channel, m.control, m.value) for m in dummy_port.messages if m.type == "control_change"]
+    assert (0, 64, 0) in ccs
+    assert (0, 123, 0) in ccs

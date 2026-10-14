@@ -43,6 +43,39 @@ async def send_cc(
         logger.debug(f"send_cc failed: {e}")
 
 
+async def silence_all_notes(
+    queue_or_port: Any,
+    channels: Optional[list[int]] = None,
+) -> None:
+    """
+    Send MIDI Panic / Silence across specified channels (or all 16 channels).
+    Releases sustain and sostenuto pedals (CC 64, CC 66), sends All Notes Off (CC 123),
+    All Sound Off (CC 120), and Reset All Controllers (CC 121).
+
+    Args:
+        queue_or_port: The MIDI queue or port to send through.
+        channels: Optional list of channels. If None, targets all channels 0-15.
+    """
+    if queue_or_port is None:
+        return
+
+    if channels is None:
+        channels = list(range(16))
+
+    for ch in channels:
+        try:
+            # 1. Damper / Sustain Pedal Off (CC 64 = 0)
+            await _send(queue_or_port, mido.Message("control_change", channel=ch, control=64, value=0))
+            # 2. Sostenuto Pedal Off (CC 66 = 0)
+            await _send(queue_or_port, mido.Message("control_change", channel=ch, control=66, value=0))
+            # 3. All Notes Off (CC 123 = 0)
+            await _send(queue_or_port, mido.Message("control_change", channel=ch, control=123, value=0))
+            # 4. All Sound Off (CC 120 = 0)
+            await _send(queue_or_port, mido.Message("control_change", channel=ch, control=120, value=0))
+        except Exception as e:
+            logger.debug(f"silence_all_notes failed on channel {ch}: {e}")
+
+
 # ---------------------------------------------------------------------------
 # Multi-note helpers
 # ---------------------------------------------------------------------------

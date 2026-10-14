@@ -83,6 +83,8 @@ async def handle_client(
 
         if packet_handler.shutdown_requested or packet_handler.sidecar_mode:
             logger.info("[TCP Server] Client session finished in sidecar/shutdown mode. Stopping server.")
+            state.shutdown_requested = True
+            state.is_alive = False
             server = server_holder.get("server")
             if server is not None:
                 server.close()

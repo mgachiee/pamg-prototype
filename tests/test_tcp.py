@@ -298,3 +298,48 @@ def test_end_to_end_test_client_all_phases(dummy_port):
 
     asyncio.run(_main())
 
+
+def test_tcp_client_disconnect_sidecar_shuts_down_cleanly(dummy_port):
+    """Verify that in sidecar mode, an unexpected client disconnect shuts down clock and silences notes."""
+    from unittest.mock import patch
+    from src.core.clock import run_clock
+    from src.core.routing import RoutingType
+
+    state = GameState()
+
+    async def _main():
+        with patch("src.core.clock.open_midi_ports", return_value=(dummy_port, dummy_port)):
+            server = await start_tcp_server(host="127.0.0.1", port=9097, state=state, sidecar=True)
+            clock_task = asyncio.create_task(
+                run_clock(
+                    tempo=360,
+                    loop_size=4,
+                    grain=4,
+                    routing_mode=RoutingType.single_port,
+                    game_state=state,
+                )
+            )
+
+            async with server:
+                reader, writer = await asyncio.open_connection("127.0.0.1", 9097)
+                writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
+                await writer.drain()
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                # Abrupt client disconnection (simulating game closing or crashing)
+                writer.close()
+                await writer.wait_closed()
+
+                # Wait for sidecar clock task to finish automatically
+                await asyncio.wait_for(clock_task, timeout=3.0)
+
+            assert state.is_alive is False
+            assert state.shutdown_requested is True
+            assert dummy_port.closed is True
+            # Verify panic silence was sent to the port
+            ccs = [(m.channel, m.control, m.value) for m in dummy_port.messages if m.type == "control_change"]
+            assert (0, 64, 0) in ccs
+            assert (0, 123, 0) in ccs
+
+    asyncio.run(_main())
+

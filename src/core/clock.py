@@ -38,7 +38,7 @@ from src.core.configs import (
 )
 from src.core.routing import RoutingType
 from src.core.midi_io import open_midi_ports, close_midi_ports
-from src.core.players import play_note, play_ratchet, send_cc
+from src.core.players import play_note, play_ratchet, send_cc, silence_all_notes
 from src.core.midi_events import normalize_event
 from src.core.scheduler import TaskManager
 from src.modules.percussion_agent import PercussionAgent
@@ -399,11 +399,27 @@ async def run_clock(
                 game_state.measure = loop_index
                 game_state.step_in_measure = local_index
 
-                # If playback is paused via TCP, wait and reset next_pulse_time
+                # If playback is paused via TCP, cancel active note tasks and silence ports
                 if game_state.paused:
+                    scheduled_tasks.cancel_all_tasks()
+                    try:
+                        await silence_all_notes(mel_queue)
+                        if perc_queue is not None and perc_queue is not mel_queue:
+                            await silence_all_notes(perc_queue)
+                    except Exception:
+                        pass
+
+                    if hasattr(port_mel, "panic"):
+                        port_mel.panic()
+                    if hasattr(port_perc, "panic") and port_perc is not port_mel:
+                        port_perc.panic()
+
                     while game_state.paused and game_state.is_alive and not game_state.shutdown_requested:
                         await asyncio.sleep(0.05)
                     next_pulse_time = running_loop.time()
+                    if game_state.is_alive and not game_state.shutdown_requested:
+                        await _send_program_changes(mel_queue)
+                        await _send_cc_changes(mel_queue)
 
                 if not game_state.is_alive or game_state.shutdown_requested:
                     is_playing = False
@@ -768,12 +784,22 @@ async def run_clock(
         # ------------------------------------------------------------------
         # Shutdown and cleanup
         # ------------------------------------------------------------------
-        # Wait for scheduled note/chord tasks to finish.
-        player_tasks = [t for t in scheduled_tasks.get_scheduled_tasks() if t is not None]
-        if player_tasks:
-            if debug_midi:
-                logger.debug(f"Waiting for {len(scheduled_tasks)} note tasks to finish...")
-            await asyncio.gather(*player_tasks, return_exceptions=True)
+        # Cancel any scheduled note/chord tasks immediately
+        scheduled_tasks.cancel_all_tasks()
+
+        # Send silence and pedal release
+        try:
+            if mel_queue is not None:
+                await silence_all_notes(mel_queue)
+            if perc_queue is not None and perc_queue is not mel_queue:
+                await silence_all_notes(perc_queue)
+        except Exception:
+            pass
+
+        if hasattr(port_mel, "panic"):
+            port_mel.panic()
+        if hasattr(port_perc, "panic") and port_perc is not port_mel:
+            port_perc.panic()
 
         # Signal the writer to exit
         if mel_queue is not None:

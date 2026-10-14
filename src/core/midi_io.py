@@ -1,5 +1,4 @@
-"""MIDI port discovery and routing helpers."""
-
+import atexit
 import mido
 import subprocess
 
@@ -61,10 +60,14 @@ class NativeFluidSynthPort:
             stderr=subprocess.DEVNULL
         )
         self.closed = False
+        atexit.register(self.close)
         self.audio_driver = audio_driver
         self.v_floor = int(self.config.get("velocity_floor", 15))
         self.v_ceiling = int(self.config.get("velocity_ceiling", 120))
         self.v_curve = str(self.config.get("velocity_curve", "soft_knee"))
+
+    def __del__(self):
+        self.close()
 
     def _shape_velocity(self, velocity: int) -> int:
         """
@@ -119,17 +122,37 @@ class NativeFluidSynthPort:
         except Exception:
             pass
 
+    def panic(self):
+        """Immediately silence all voices, release pedals, and reset controllers in FluidSynth."""
+        if self.closed or not self.process or not self.process.stdin:
+            return
+        try:
+            for ch in range(16):
+                self.process.stdin.write(f"cc {ch} 64 0\n".encode("utf-8"))
+                self.process.stdin.write(f"cc {ch} 66 0\n".encode("utf-8"))
+                self.process.stdin.write(f"cc {ch} 123 0\n".encode("utf-8"))
+                self.process.stdin.write(f"cc {ch} 120 0\n".encode("utf-8"))
+            self.process.stdin.write(b"reset\n")
+            self.process.stdin.flush()
+        except Exception:
+            pass
+
     def close(self):
         if not self.closed:
             self.closed = True
             try:
-                if self.process.stdin:
+                self.panic()
+                if self.process and self.process.stdin:
                     self.process.stdin.write(b"quit\n")
                     self.process.stdin.flush()
                 self.process.terminate()
-                self.process.wait(timeout=2)
+                self.process.wait(timeout=1)
             except Exception:
-                pass
+                try:
+                    if self.process:
+                        self.process.kill()
+                except Exception:
+                    pass
 
 
 # ------------------------------------------------------------------
@@ -208,6 +231,7 @@ def close_midi_ports(*ports):
     """
     Close any provided MIDI output ports or synth subprocesses.
 
+    Sends panic / silence across all channels before closing to prevent hanging notes.
     Deduplicates port references and checks closed state to prevent closing
     the same port multiple times in single-port routing mode.
 
@@ -220,6 +244,18 @@ def close_midi_ports(*ports):
             seen_ids.add(id(port))
             try:
                 # Support both mido ports and our custom NativeFluidSynthPort
+                if hasattr(port, "panic"):
+                    port.panic()
+                elif hasattr(port, "send"):
+                    for ch in range(16):
+                        try:
+                            port.send(mido.Message("control_change", channel=ch, control=64, value=0))
+                            port.send(mido.Message("control_change", channel=ch, control=66, value=0))
+                            port.send(mido.Message("control_change", channel=ch, control=123, value=0))
+                            port.send(mido.Message("control_change", channel=ch, control=120, value=0))
+                        except Exception:
+                            pass
+
                 if hasattr(port, 'closed'):
                     is_closed = port.closed
                 else:
