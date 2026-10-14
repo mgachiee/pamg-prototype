@@ -516,7 +516,6 @@ class PamgGui:
                 drum_port_name=DRUM_PORT_NAME,
                 debug_midi=DEBUG_MIDI,
                 game_state_callback=_game_state_callback,
-                state_broadcast_callback=_broadcast_callback,
                 base_seed=base_seed,
             )
 

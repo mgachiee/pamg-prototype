@@ -55,3 +55,12 @@ class Logger:
             message (str): Message to log.
         """
         logger.debug(message)
+
+    def exception(self, message: str) -> None:
+        """
+        Log an exception-level message with stack trace.
+
+        Args:
+            message (str): Message to log.
+        """
+        logger.exception(message)

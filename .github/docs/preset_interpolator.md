@@ -60,6 +60,24 @@ w_D =  x       y
 
 The four weights always sum to **1.0**, so the blend is a convex combination — values can never exceed the range spanned by the four presets.
 
+### Calibrated Corner Presets Reference (`src/core/configs.py`)
+
+| Parameter | Preset A `(0, 0)`<br/>Somber / Ambient | Preset B `(1, 0)`<br/>Calm / Sanctuary | Preset C `(0, 1)`<br/>Danger / Combat | Preset D `(1, 1)`<br/>Heroic / Triumphant |
+|---|---|---|---|---|
+| **Affect Quadrant** | $-V, -A$ | $+V, -A$ | $-V, +A$ | $+V, +A$ |
+| **`ma_velocity`** | 45.0 ($pp$) | 60.0 ($mp$) | 105.0 ($ff$) | 100.0 ($f$) |
+| **`ma_orch_plus_minus`** | 0.0 (Solo Strings) | 0.2 (Solo Strings) | 0.8 (Tutti Strings+Winds+Brass) | 1.0 (Full Tutti) |
+| **`ha_tension`** | 1.0 (Root triad) | 3.0 (Tertian triad) | 10.0 (Modal borrowed colors) | 5.0 (Diatonic 7th/9th) |
+| **`ha_register_ins`** | 1.0 (Piano) | 1.0 (Piano) | 3.0 (Piano+Strings+Winds) | 4.0 (Full Tutti 4 Families) |
+| **`ha_ins_plus_minus`** | 0.0 (1 instrument) | 0.2 (Sparse) | 0.8 (Dense Tutti) | 1.0 (Full Ensemble) |
+| **`ha_vel_ins`** | 42.0 ($pp$) | 58.0 ($mp$) | 105.0 ($ff$) | 100.0 ($f$) |
+| **`pa_vel_perc`** | 35.0 ($pp$) | 48.0 ($p$) | 115.0 ($ff$) | 100.0 ($f$) |
+| **`pa_acc_beat_p`** | 0.15 | 0.25 | 0.90 | 0.60 |
+| **`pa_ks_plus_minus`** | -0.5 (Downbeat pulse) | -0.2 (Downbeat + side stick) | 0.7 (Driving gran cassa + snare) | 0.5 (Driving heroic groove) |
+| **`pa_toms_plus_minus`**| -0.5 (Soft timpani swell) | -0.3 (Gentle timpani prep) | 0.6 (Full timpani rolls) | 0.4 (Timpani cadence) |
+| **`pa_cymb_plus_minus`**| -0.6 (Soft cymbal wash) | -0.4 (Ambient touch) | 0.7 (Concert crashes) | 0.5 (Concert crashes) |
+| **`seeded_phrase_length`**| 8.0 beats | 6.0 beats | 2.0 beats | 4.0 beats |
+
 ---
 
 ## Parameter Field Classification
@@ -67,40 +85,17 @@ The four weights always sum to **1.0**, so the blend is a convex combination —
 Not every parameter in a `Preset` should be interpolated the same way. The interpolator classifies each `Preset` field into one of four categories:
 
 ### 1. Continuous (default)
-Scalar numeric fields that change smoothly (e.g. `tempo_offset`, `density`, `filter_cutoff`).
+All baseline PAMG parameters (§3.5, §4.5, §5.4) are continuous numeric fields that change smoothly across the XY pad:
+- **Melody Agent:** `ma_step`, `ma_range_low`, `ma_range_high`, `ma_velocity`, `ma_tac`, `ma_plus_minus_notes`, `ma_mv_even`, `ma_mv_odd`, `ma_orch_plus_minus`, `ma_orch_range_low`, `ma_orch_range_high`, `ma_trans`
+- **Harmony Agent:** `ha_tension`, `ha_cpx_prog`, `ha_plus_minus_notes`, `ha_acc_beat`, `ha_vel_ins`, `ha_voice_ins`, `ha_range_ins_low`, `ha_range_ins_high`, `ha_register_ins`, `ha_ins_plus_minus`, `ha_move`
+- **Percussion Agent:** `pa_vel_perc`, `pa_acc_beat_p`, `pa_ks_plus_minus`, `pa_toms_plus_minus`, `pa_cymb_plus_minus`
+- **Shared:** `seeded_phrase_length`, `shape_depth`, `shape_length`
 
 - **Blend:** weighted sum across the four corner values.
 - **Smooth:** one lerp step toward the blended target every pulse.
 
-### 2. Discrete (`_DISCRETE_FIELDS`)
-Scalar parameters that must not take intermediate values (e.g. `melody_program`, `harmony_layer_mode`).
-
-```python
-_DISCRETE_FIELDS = {"melody_program", "harmony_layer_mode"}
-```
-
-- **Blend:** winner-take-all — the preset with the highest bilinear weight is selected.
-- **Smooth:** no smoothing; changes are deferred to phrase boundaries via `get_quantized_state()`.
-
-### 3. List-Interpolated (`_LIST_INTERPOLATED_FIELDS`)
-Lists of floats that are safe to blend continuously (e.g. `harmony_layer_weights`).
-
-```python
-_LIST_INTERPOLATED_FIELDS = {"harmony_layer_weights"}
-```
-
-- **Blend:** element-wise weighted sum; shorter lists are padded with their last value (fill = `1.0` for weights).
-- **Smooth:** element-wise lerp toward the blended target list every pulse.
-
-### 4. List-Discrete (`_LIST_DISCRETE_FIELDS`)
-Lists of discrete values (e.g. `harmony_programs` — a list of MIDI program numbers per harmony layer).
-
-```python
-_LIST_DISCRETE_FIELDS = {"harmony_programs"}
-```
-
-- **Blend:** winner-take-all per list (the entire list from the dominant preset is selected).
-- **Smooth:** no smoothing; deferred to phrase boundaries.
+### 2. Quantized State at Phrase Boundaries
+`get_quantized_state(phrase_start)` snapshots the interpolated parameter state on phrase boundaries, ensuring macro structure transitions land on bar boundaries.
 
 ---
 

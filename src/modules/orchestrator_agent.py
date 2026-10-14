@@ -4,6 +4,8 @@ import random
 from itertools import zip_longest
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.core.configs import AUDIO_CONFIG, PERCUSSION_PROGRAM
+
 
 # ---------------------------------------------------------------------------
 # Orchestration agent
@@ -30,7 +32,13 @@ class OrchestratorAgent:
         harmony_range: Tuple[int, int] = (40, 76),
         harmony_programs: Optional[List[int]] = None,
         melody_program: int = 0,
-        harmony_layer_mode: str = "probabilistic",
+        melody_programs: Optional[List[int]] = None,
+        percussion_program: int = PERCUSSION_PROGRAM,
+        harmony_layer_mode: str = "deterministic",
+        ma_orch_plus_minus: float = 0.5,
+        ha_ins_plus_minus: float = 0.5,
+        ha_register_ins: float = 1.0,
+        audio_config: Optional[Dict[str, Any]] = None,
         seed: Optional[int] = None,
     ) -> None:
         """
@@ -45,7 +53,12 @@ class OrchestratorAgent:
             harmony_range (Tuple[int, int]): Allowed harmony pitch range.
             harmony_programs (Optional[List[int]]): Programs per layer.
             melody_program (int): Program for melody channel(s).
-            harmony_layer_mode (str): "deterministic" or "probabilistic".
+            melody_programs (Optional[List[int]]): Programs per melody layer.
+            harmony_layer_mode (str): Mode for instrument layering.
+            ma_orch_plus_minus (float): Orch +/- (MA) baseline control (§5.1.1).
+            ha_ins_plus_minus (float): Ins +/- (HA) baseline control (§5.1.2).
+            ha_register_ins (float): Reg ins (HA) baseline control (§5.1.2).
+            audio_config (Optional[Dict[str, Any]]): Audio and spatial staging config.
             seed (Optional[int]): RNG seed for weighted layer selection.
         """
         self.melody_channels = self._normalize_melody_channels(melody_channels)
@@ -58,27 +71,36 @@ class OrchestratorAgent:
             int(harmony_range[0]),
             int(harmony_range[1]),
         )
+        self.ma_orch_plus_minus = float(ma_orch_plus_minus)
+        self.ha_ins_plus_minus = float(ha_ins_plus_minus)
+        self.ha_register_ins = float(ha_register_ins)
+        self.audio_config = dict(audio_config) if audio_config is not None else dict(AUDIO_CONFIG)
         self._rng = random.Random(seed)
         self.harmony_channels = self._normalize_harmony_channels(harmony_channels)
         self.harmony_layer_weights = self._normalize_layer_weights(
             harmony_layer_weights,
         )
         self.melody_program = self._clamp_program(melody_program)
+        self.melody_programs = self._normalize_melody_programs(melody_programs)
         self.harmony_programs = self._normalize_harmony_programs(
             harmony_programs,
         )
-        self.harmony_layer_mode = self._normalize_layer_mode(
-            harmony_layer_mode,
-        )
+        self.percussion_program = self._clamp_program(percussion_program)
+        self.harmony_layer_mode = "deterministic"
         self._harmony_layer_mask: Optional[List[bool]] = None
         self._channel_families: Dict[int, str] = {}
         self._family_ranges: Dict[str, Tuple[int, int]] = {}
         self._channel_ranges: Dict[int, Tuple[int, int]] = {}
         self._pending_program_changes: List[Tuple[int, int]] = []
-        self._pending_cc_changes: List[Tuple[int, int, int]] = []  # (channel, cc, value)
+        self._pending_cc_changes: List[Tuple[int, int, int]] = []
+        self._queued_reverb_channels: set = set()
+        self._queued_volume_channels: set = set()
         self._last_melody_channels: Optional[List[int]] = None
+        self._last_melody_programs: Optional[List[int]] = None
         self._last_melody_program: Optional[int] = None
+        self._last_melody_pairs: List[Tuple[int, int]] = []
         self._last_harmony_pairs: List[Tuple[int, int]] = []
+        self._last_percussion_program: Optional[int] = None
         self._queue_program_changes(force=True)
         self._queue_cc_changes(force=True)
 
@@ -86,38 +108,19 @@ class OrchestratorAgent:
     # Event processing
     # ------------------------------------------------------------------
 
-    def _transpose_note_to_range(self, note: int, note_range: Tuple[int, int]) -> int:
+    def _clamp_note_to_range(self, note: int, note_range: Tuple[int, int]) -> int:
         """
-        Transpose a note by octaves until it falls within the specified range.
-
-        If the note is already in range, it is returned unchanged.
-        If it is below, it is shifted up by 12-semitone steps.
-        If it is above, it is shifted down.
+        Clamp a note to the specified range bounds [Low, High].
 
         Args:
             note (int): Initial MIDI note.
             note_range (Tuple[int, int]): (Low, High) bounds.
 
         Returns:
-            int: Transposed note within [Low, High].
+            int: Clamped note within [Low, High].
         """
         low, high = note_range
-        note = int(note)
-
-        # Edge case: range is invalid or too small for octave shift.
-        if low >= high:
-            return low
-        if (high - low) < 1:
-            return low
-
-        # Transpose by octaves.
-        while note < low:
-            note += 12
-        while note > high:
-            note -= 12
-
-        # Final safety clamp in case the range is smaller than an octave.
-        return max(low, min(high, note))
+        return max(low, min(high, int(note)))
 
     def _prepare_event(
         self,
@@ -129,7 +132,7 @@ class OrchestratorAgent:
         prepared["channel"] = channel
         if "note" in prepared:
             resolved_range = self._resolve_range(channel, note_range)
-            prepared["note"] = self._transpose_note_to_range(
+            prepared["note"] = self._clamp_note_to_range(
                 prepared["note"],
                 resolved_range,
             )
@@ -142,12 +145,35 @@ class OrchestratorAgent:
     ) -> List[Dict[str, Any]]:
         """
         Merge melody and harmony events, assigning channels and clamping notes.
+        Strict deterministic instrument addition/subtraction (§5.1.1, §5.1.2)
+        and dynamic 4x2 matrix routing based on preset parameters.
         """
         merged: List[Dict[str, Any]] = []
 
+        # 5.1.1 Add/subtract instruments (melody lines) {Orch +/- (MA)}
+        if len(self.melody_channels) == 4:
+            if self.ma_orch_plus_minus < 0.4:
+                # Solo Strings
+                active_mel_channels = [self.melody_channels[0]]
+            elif self.ma_orch_plus_minus < 0.8:
+                # Strings + Woodwinds doubling
+                active_mel_channels = [self.melody_channels[0], self.melody_channels[2]]
+            else:
+                # Strings + Woodwinds + Brass tutti doubling
+                active_mel_channels = [
+                    self.melody_channels[0],
+                    self.melody_channels[2],
+                    self.melody_channels[3],
+                ]
+        else:
+            if len(self.melody_channels) > 1 and self.ma_orch_plus_minus < 0.5:
+                active_mel_channels = self.melody_channels[:1]
+            else:
+                active_mel_channels = self.melody_channels
+
         # Prepare melody events (with doubling support).
         for event in melody_events:
-            for channel in self.melody_channels:
+            for channel in active_mel_channels:
                 merged.append(
                     self._prepare_event(
                         event,
@@ -157,29 +183,52 @@ class OrchestratorAgent:
                 )
 
         if harmony_events:
-            # Apply layer masks and weights per harmony channel.
+            # 5.1.2 Add/subtract instruments (assign voices) {Reg ins & Ins +/- (HA)}
             layer_mask = self._normalize_layer_mask(self._harmony_layer_mask)
-            
-            # Arpeggio/Voice distribution logic:
-            # If an event has a `voice_index`, it is assigned to a specific
-            # channel rather than being duplicated across all layers.
+
+            if len(self.harmony_channels) == 4:
+                # Registration priority: Piano (idx 1), Strings (idx 0), Woodwinds (idx 2), Brass (idx 3)
+                reg_order = [1, 0, 2, 3]
+                reg_count = max(1, min(4, int(round(self.ha_register_ins))))
+                registered_indices = reg_order[:reg_count]
+                pool_size = len(registered_indices)
+                active_count = max(
+                    1,
+                    min(
+                        pool_size,
+                        int(round(1 + self.ha_ins_plus_minus * (pool_size - 1))),
+                    ),
+                )
+                active_harm_channels = [
+                    self.harmony_channels[i] for i in registered_indices[:active_count]
+                ]
+            else:
+                max_harm = len(self.harmony_channels)
+                active_count = max(
+                    1,
+                    min(
+                        max_harm,
+                        int(round(1 + self.ha_ins_plus_minus * (max_harm - 1))),
+                    ),
+                )
+                active_harm_channels = self.harmony_channels[:active_count]
+
             for event in harmony_events:
-                voice_index = event.get("voice_index")
-                
-                if voice_index is not None:
-                    # Distribute this specific voice to one channel.
-                    target_idx = voice_index % len(self.harmony_channels)
-                    channel = self.harmony_channels[target_idx]
-                    weight = self.harmony_layer_weights[target_idx]
-                    
-                    if layer_mask is not None and not layer_mask[target_idx]:
+                for channel in active_harm_channels:
+                    orig_idx = (
+                        self.harmony_channels.index(channel)
+                        if channel in self.harmony_channels
+                        else 0
+                    )
+                    if layer_mask is not None and orig_idx < len(layer_mask) and not layer_mask[orig_idx]:
                         continue
-                    
-                    # Instead of probabilistic note-dropping, we use a 
-                    # threshold check for polyphony conservation.
-                    if weight < 0.05:
+                    weight = (
+                        self.harmony_layer_weights[orig_idx]
+                        if orig_idx < len(self.harmony_layer_weights)
+                        else 1.0
+                    )
+                    if weight < 0.5:
                         continue
-                        
                     merged.append(
                         self._prepare_event(
                             event,
@@ -187,22 +236,6 @@ class OrchestratorAgent:
                             self.harmony_range,
                         )
                     )
-                else:
-                    # Fallback: duplicate the event across all active layers.
-                    for idx, (channel, weight) in enumerate(
-                        zip(self.harmony_channels, self.harmony_layer_weights)
-                    ):
-                        if layer_mask is not None and not layer_mask[idx]:
-                            continue
-                        if weight < 0.05:
-                            continue
-                        merged.append(
-                            self._prepare_event(
-                                event,
-                                channel,
-                                self.harmony_range,
-                            )
-                        )
 
         return merged
 
@@ -240,6 +273,9 @@ class OrchestratorAgent:
             new_val = self._normalize_melody_channels(kwargs["melody_channels"])
             if new_val != self.melody_channels:
                 self.melody_channels = new_val
+                self.melody_programs = self._normalize_melody_programs(
+                    kwargs.get("melody_programs", self.melody_programs)
+                )
                 changed = True
                 program_state_changed = True
 
@@ -276,12 +312,21 @@ class OrchestratorAgent:
             self.harmony_layer_weights = self._normalize_layer_weights(
                 kwargs["harmony_layer_weights"],
             )
+            self._queue_cc_changes()
             changed = True
 
-        if "melody_program" in kwargs:
+        if "melody_program" in kwargs and "melody_programs" not in kwargs:
             new_val = self._clamp_program(kwargs["melody_program"])
             if new_val != self.melody_program:
                 self.melody_program = new_val
+                self.melody_programs = self._normalize_melody_programs([new_val])
+                changed = True
+                program_state_changed = True
+
+        if "melody_programs" in kwargs:
+            new_progs = self._normalize_melody_programs(kwargs["melody_programs"])
+            if new_progs != self.melody_programs:
+                self.melody_programs = new_progs
                 changed = True
                 program_state_changed = True
 
@@ -294,14 +339,42 @@ class OrchestratorAgent:
                 changed = True
                 program_state_changed = True
 
-        if "melody_range" in kwargs:
+        if "ha_register_ins" in kwargs:
+            new_val = max(1.0, min(4.0, float(kwargs["ha_register_ins"])))
+            if new_val != self.ha_register_ins:
+                self.ha_register_ins = new_val
+                changed = True
+
+        if "ma_orch_plus_minus" in kwargs:
+            new_val = max(0.0, min(1.0, float(kwargs["ma_orch_plus_minus"])))
+            if new_val != self.ma_orch_plus_minus:
+                self.ma_orch_plus_minus = new_val
+                changed = True
+
+        if "ha_ins_plus_minus" in kwargs:
+            new_val = max(0.0, min(1.0, float(kwargs["ha_ins_plus_minus"])))
+            if new_val != self.ha_ins_plus_minus:
+                self.ha_ins_plus_minus = new_val
+                changed = True
+
+        if "ma_orch_range_low" in kwargs and "ma_orch_range_high" in kwargs:
+            new_val = (int(kwargs["ma_orch_range_low"]), int(kwargs["ma_orch_range_high"]))
+            if new_val != self.melody_range:
+                self.melody_range = new_val
+                changed = True
+        elif "melody_range" in kwargs:
             new_range = kwargs["melody_range"]
             new_val = (int(new_range[0]), int(new_range[1]))
             if new_val != self.melody_range:
                 self.melody_range = new_val
                 changed = True
 
-        if "harmony_range" in kwargs:
+        if "ha_range_ins_low" in kwargs and "ha_range_ins_high" in kwargs:
+            new_val = (int(kwargs["ha_range_ins_low"]), int(kwargs["ha_range_ins_high"]))
+            if new_val != self.harmony_range:
+                self.harmony_range = new_val
+                changed = True
+        elif "harmony_range" in kwargs:
             new_range = kwargs["harmony_range"]
             new_val = (int(new_range[0]), int(new_range[1]))
             if new_val != self.harmony_range:
@@ -309,10 +382,7 @@ class OrchestratorAgent:
                 changed = True
 
         if "harmony_layer_mode" in kwargs:
-            new_val = self._normalize_layer_mode(kwargs["harmony_layer_mode"])
-            if new_val != self.harmony_layer_mode:
-                self.harmony_layer_mode = new_val
-                changed = True
+            pass  # Retained as no-op for backward compatibility (deterministic only)
 
         if "harmony_layer_mask" in kwargs:
             new_mask = self._normalize_layer_mask(kwargs["harmony_layer_mask"])
@@ -350,14 +420,58 @@ class OrchestratorAgent:
                 self._channel_ranges = new_ranges
                 changed = True
 
+        if "audio_config" in kwargs and kwargs["audio_config"] is not None:
+            self.audio_config = dict(kwargs["audio_config"])
+            self._queue_cc_changes(force=True)
+            changed = True
+
+        if "seed" in kwargs and kwargs["seed"] is not None:
+            self._rng.seed(int(kwargs["seed"]))
+            changed = True
+
+        if "percussion_program" in kwargs and kwargs["percussion_program"] is not None:
+            new_val = self._clamp_program(kwargs["percussion_program"])
+            if new_val != self.percussion_program:
+                self.percussion_program = new_val
+                program_state_changed = True
+
         if program_state_changed:
             self._queue_program_changes()
 
         return changed
 
     # ------------------------------------------------------------------
-    # Program change handling
+    # Program and CC change handling
     # ------------------------------------------------------------------
+
+    def _queue_cc_changes(self, force: bool = False) -> None:
+        """Queue MIDI CC updates (CC 91 Reverb, CC 7 Volume, and CC 11 Expression)."""
+        reverb_sends = self.audio_config.get("channel_reverb_sends", {})
+        volumes = self.audio_config.get("channel_volumes", {})
+
+        # 1. CC 91 Reverb Sends (Spatial placement in concert hall)
+        for ch, val in reverb_sends.items():
+            if force or ch not in self._queued_reverb_channels:
+                self._pending_cc_changes.append((int(ch), 91, max(0, min(127, int(val)))))
+                self._queued_reverb_channels.add(int(ch))
+
+        # 2. CC 7 Channel Volume Staging (Soloist pocket for lead melody)
+        for ch, val in volumes.items():
+            if force or ch not in self._queued_volume_channels:
+                self._pending_cc_changes.append((int(ch), 7, max(0, min(127, int(val)))))
+                self._queued_volume_channels.add(int(ch))
+
+        # 3. CC 11 Dynamic Harmony Expression
+        for idx, channel in enumerate(self.harmony_channels):
+            weight = self.harmony_layer_weights[idx] if idx < len(self.harmony_layer_weights) else 1.0
+            val = max(0, min(127, int(round(weight * 127))))
+            self._pending_cc_changes.append((int(channel), 11, val))
+
+    def consume_cc_changes(self) -> List[Tuple[int, int, int]]:
+        """Return and clear pending CC changes as (channel, control, value) tuples."""
+        changes = list(self._pending_cc_changes)
+        self._pending_cc_changes.clear()
+        return changes
 
     def consume_program_changes(self) -> List[Tuple[int, int]]:
         """
@@ -367,18 +481,11 @@ class OrchestratorAgent:
         self._pending_program_changes.clear()
         return changes
 
-    def consume_cc_changes(self) -> List[Tuple[int, int, int]]:
-        """
-        Return and clear pending Control Change (CC) messages.
-        Format: (channel, control_number, value)
-        """
-        changes = list(self._pending_cc_changes)
-        self._pending_cc_changes.clear()
-        return changes
 
     def on_phrase_start(self) -> None:
-        """Force a program-change snapshot at phrase boundaries."""
+        """Force a program-change and CC snapshot at phrase boundaries."""
         self._queue_program_changes(force=True)
+        self._queue_cc_changes(force=True)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -436,6 +543,23 @@ class OrchestratorAgent:
             )
         return normalized[: len(self.harmony_channels)]
 
+    def _normalize_melody_programs(
+        self,
+        programs: Optional[Iterable[int]],
+    ) -> List[int]:
+        if programs is None:
+            programs = [self.melody_program]
+
+        normalized = [self._clamp_program(val) for val in programs]
+        if not normalized:
+            normalized = [self.melody_program]
+
+        if len(normalized) < len(self.melody_channels):
+            last = normalized[-1]
+            missing = len(self.melody_channels) - len(normalized)
+            normalized.extend([last for _ in range(missing)])
+        return normalized[: len(self.melody_channels)]
+
     def _normalize_harmony_programs(
         self,
         programs: Optional[Iterable[int]],
@@ -453,34 +577,56 @@ class OrchestratorAgent:
             normalized.extend([last for _ in range(missing)])
         return normalized[: len(self.harmony_channels)]
 
+    def _build_melody_program_pairs(self) -> List[Tuple[int, int]]:
+        if not self.melody_channels:
+            return []
+
+        programs = list(self.melody_programs)
+        fallback = programs[-1] if programs else self.melody_program
+        sentinel = object()
+        pairs: List[Tuple[int, int]] = []
+
+        for channel, program in zip_longest(
+            self.melody_channels,
+            programs,
+            fillvalue=sentinel,
+        ):
+            if channel is sentinel:
+                break
+            if program is sentinel:
+                program = fallback
+            prog = self._clamp_program(program)
+            if prog == self.melody_program and channel == 1 and self._channel_families.get(channel) == "woodwinds":
+                prog = 73
+            pairs.append((int(channel), prog))
+            fallback = program
+
+        return pairs
+
     def _queue_program_changes(self, force: bool = False) -> None:
+        melody_pairs = self._build_melody_program_pairs()
         if force or (
             self._last_melody_channels != self.melody_channels
+            or self._last_melody_programs != self.melody_programs
             or self._last_melody_program != self.melody_program
+            or melody_pairs != self._last_melody_pairs
         ):
-            for channel in self.melody_channels:
-                self._pending_program_changes.append(
-                    (channel, self.melody_program)
-                )
+            self._pending_program_changes.extend(melody_pairs)
             self._last_melody_channels = list(self.melody_channels)
+            self._last_melody_programs = list(self.melody_programs)
             self._last_melody_program = self.melody_program
+            self._last_melody_pairs = list(melody_pairs)
 
         harmony_pairs = self._build_harmony_program_pairs()
         if force or harmony_pairs != self._last_harmony_pairs:
             self._pending_program_changes.extend(harmony_pairs)
             self._last_harmony_pairs = list(harmony_pairs)
 
-    def _queue_cc_changes(self, force: bool = False) -> None:
-        """Queue Expression (CC 11) messages based on layer weights."""
-        # CC 11 is Expression; mapped from weight [0, 1] to [0, 127]
-        EXPRESSION_CC = 11
-        for idx, (channel, weight) in enumerate(
-            zip(self.harmony_channels, self.harmony_layer_weights)
-        ):
-            cc_value = int(round(weight * 127))
-            self._pending_cc_changes.append(
-                (int(channel), EXPRESSION_CC, cc_value)
-            )
+        # Percussion Program Change (Channel 9 - General MIDI Orchestra Kit)
+        if force or self.percussion_program != self._last_percussion_program:
+            self._pending_program_changes.append((9, self.percussion_program))
+            self._last_percussion_program = self.percussion_program
+
 
     def _build_harmony_program_pairs(self) -> List[Tuple[int, int]]:
         if not self.harmony_channels:

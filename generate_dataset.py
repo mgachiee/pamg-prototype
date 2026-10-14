@@ -108,33 +108,41 @@ def generate_dataset():
                 # Update agent parameters at phrase boundaries
                 if tick == 0 or phrase_start:
                     melody_agent.update_params(
-                        max_step=max(1, int(round(preset.melody_max_step))),
-                        pitch_range=(int(preset.melody_pitch_low), int(preset.melody_pitch_high)),
-                        syncopation_probability=float(preset.melody_syncopation),
-                        accent_probability=float(preset.melody_accent),
-                        ratchet_probability=float(preset.melody_ratchet_probability),
+                        ma_step=max(1, int(round(preset.ma_step))),
+                        ma_range_low=int(preset.ma_range_low),
+                        ma_range_high=int(preset.ma_range_high),
+                        ma_velocity=float(preset.ma_velocity),
+                        ma_tac=float(preset.ma_tac),
+                        ma_plus_minus_notes=float(preset.ma_plus_minus_notes),
+                        ma_mv_even=float(preset.ma_mv_even),
+                        ma_mv_odd=float(preset.ma_mv_odd),
+                        ma_trans=int(round(preset.ma_trans)),
+                        shape_depth=int(round(preset.shape_depth)),
+                        shape_length=int(round(preset.shape_length)),
                     )
                     orchestrator_agent.update_params(
-                        melody_range=(int(preset.melody_pitch_low), int(preset.melody_pitch_high)),
-                        harmony_range=(int(preset.harmony_pitch_low), int(preset.harmony_pitch_high)),
-                        harmony_layer_weights=list(preset.harmony_layer_weights),
+                        ma_orch_plus_minus=float(preset.ma_orch_plus_minus),
+                        ha_ins_plus_minus=float(preset.ha_ins_plus_minus),
+                        ma_orch_range_low=int(preset.ma_orch_range_low),
+                        ma_orch_range_high=int(preset.ma_orch_range_high),
+                        ha_range_ins_low=int(preset.ha_range_ins_low),
+                        ha_range_ins_high=int(preset.ha_range_ins_high),
                     )
                     percussion_agent.update_params(
-                        kick_sub_prob=1.0 - float(preset.drum_kick_probability),
-                        ghost_kick_prob=float(preset.drum_ghost_kick_probability),
-                        snare_sub_prob=1.0 - float(preset.drum_snare_probability),
-                        hat_open_prob=float(preset.drum_hat_open_probability),
-                        hat_closed_prob=float(preset.drum_hat_closed_probability),
-                        hat_ratchet_prob=float(preset.drum_ratchet_probability),
+                        pa_vel_perc=float(preset.pa_vel_perc),
+                        pa_acc_beat_p=float(preset.pa_acc_beat_p),
+                        pa_ks_plus_minus=float(preset.pa_ks_plus_minus),
+                        pa_toms_plus_minus=float(preset.pa_toms_plus_minus),
+                        pa_cymb_plus_minus=float(preset.pa_cymb_plus_minus),
+                        phrase_length=phrase_length,
                     )
                     harmony_agent.update_params(
-                        tension=float(preset.harmony_tension),
-                        chord_complexity=float(preset.harmony_chord_complexity),
-                        chord_change_probability=float(preset.harmony_chord_change_probability),
-                        harmony_add_probability=float(preset.harmony_add_probability),
-                        harmony_sub_probability=float(preset.harmony_sub_probability),
-                        harmony_accent_probability=float(preset.harmony_accent_probability),
-                        scale_mode=preset.scale_mode,
+                        tension=float(preset.ha_tension),
+                        complexity_progression=float(preset.ha_cpx_prog),
+                        voice_count=max(1, int(round(preset.ha_voice_ins))),
+                        accent_probability=float(preset.ha_acc_beat),
+                        add_probability=max(0.0, float(preset.ha_plus_minus_notes)) if preset.ha_plus_minus_notes > 0 else 0.1,
+                        sub_probability=max(0.0, -float(preset.ha_plus_minus_notes)) if preset.ha_plus_minus_notes < 0 else 0.1,
                     )
                 
                 if phrase_start:

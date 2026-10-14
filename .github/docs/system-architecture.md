@@ -192,10 +192,12 @@ The resulting accent/motion pattern is **shared with other agents** (HA, PA) to 
 
 ### 2.2 Velocity Generation
 
-**Input parameters:** random walk parameters
+**Input parameters:** `ma_velocity`, random walk parameters
 
-- Assigns note velocities using a **random-walk sequence**.
-- Syncopated onsets receive a **velocity bias toward higher values**, creating expressive accenting aligned to rhythmic interest points.
+- Assigns note velocities using a **mean-reverting random-walk sequence** anchored to `ma_velocity`:
+  $$\text{pull} = (\text{base\_vel} - \text{current\_vel}) \times 0.35$$
+  with bounded step perturbations ($\pm 3$).
+- Syncopated onsets receive a **proportional velocity boost** ($0.15 \times \text{base\_vel}$), dynamically scaling expressive accents relative to current intensity ($pp$ vs $ff$) rather than using static offsets.
 
 ### 2.3 Pitch Generation
 
@@ -241,7 +243,12 @@ Uses the same Accent/Beat Follower + Add/Sub Filling approach as MA, but tuned f
 
 ### 3.2 Velocity Generation
 
-Emphasises chord onsets according to the **main accent list provided by MA**, ensuring harmonic attacks reinforce rather than conflict with melodic accents.
+**Input parameters:** `ha_vel_ins`, MA accent pattern
+
+- Dynamically scales harmonic attack velocities using `ha_vel_ins`:
+  - Normal attacks: $[\text{vel}-6, \text{vel}+6]$ clamped to $[1, 127]$.
+  - Accented attacks: $[\text{vel}+6, \text{vel}+16]$ clamped to $[1, 127]$.
+- Emphasises chord onsets according to the **main accent list provided by MA**, ensuring harmonic attacks reinforce rather than conflict with melodic accents while maintaining a serene pianissimo or dramatic forte floor.
 
 ### 3.3 Harmony Sequence Generation
 
@@ -265,6 +272,7 @@ Constructs the full chord voicing from chord tones, tension levels, and spectral
 
 #### 3.3.5 Arpeggiator
 Configurable arpeggiator that distributes chord tones rhythmically. Coordinated with the Orchestration Agent for multi-instrument voicing.
+- **Tension Gating:** Arpeggiation is strictly gated by harmonic tension ($3.0 < \text{ha\_tension} \le 10.5$). When $\text{ha\_tension} \le 3.0$ (calm / ambient states), the agent renders sustained block chords, avoiding uncharacteristic 16th-note movement.
 
 ### 3.4 Harmony Change
 Adjusts internal parameters based on chord progression events, including modulations and rhythmic pattern changes at chord boundaries.
@@ -281,72 +289,76 @@ Combines harmony pitches, velocity, and duration into a **MIDI event stream** se
 ## Module 4 — Percussion Agent (PA)
 *(Paper: Fig. 4)*
 
-Generates the drum/percussion layer. Operates **independently** of the Orchestration Agent — its MIDI stream goes directly to the MIDI port.
+Generates the cinematic orchestral percussion layer. Operates **independently** of the Orchestration Agent — its MIDI stream routes directly to MIDI Channel 9 (configured for the General MIDI Orchestra Kit, Bank 128, Program 48).
 
-### 4.1 Rhythm Generation (per instrument)
+### 4.1 Rhythm Generation (per instrument row)
 
-The rhythm engine runs **separately for each percussion instrument**:
+The rhythm engine runs **separately for each of the four baseline percussion rows**:
 
-| Instrument | Independent pattern generation |
-|---|---|
-| Kick | Accent/Beat Follower + Add/Sub Filling |
-| Snare | Accent/Beat Follower + Add/Sub Filling |
-| Toms | Accent/Beat Follower + Add/Sub Filling |
-| Cymbals | Accent/Beat Follower + Add/Sub Filling |
+| Instrument Row | GM Orchestra Kit Notes | Rhythm & Articulation Algorithm |
+|---|---|---|
+| **Kick** | Note 36 (Gran Cassa / Concert Bass Drum) | Downbeat structural anchor; Add/Sub stochastic downbeat pulse; phrase-gated to even measures in low-tension states |
+| **Snare** | Note 38 (Concert Snare), 40 (Snare Roll), 37 (Side Stick) | Half-time cadence punctuation; automatic `SIDE_STICK` in calm/low-vel states; suppressed mid-measure in negative deltas |
+| **Toms** | Notes 45, 48, 50 (Timpani A, c, d) | Preparation rolls into downbeats; pitched timpani movement; cadential gating in negative deltas |
+| **Cymbals** | Notes 42 (Susp. Cymbal), 57 (Concert Cymbal 2) | Phrase entrance accents and ambient wash; restricted to phrase boundaries in negative deltas |
 
-Each instrument has its own onset pattern, density, and accent profile derived from its own parameter subset.
+Each instrument row has its own onset pattern, density, and accent profile derived from its own baseline parameters (`pa_ks_plus_minus`, `pa_toms_plus_minus`, `pa_cymb_plus_minus`).
 
-### 4.2 Velocity Generation
-Accentuates specific percussion onsets based on beat position and parameter-driven accent rules.
+### 4.2 Velocity Generation & Low-Tension Dynamics
+Accentuates specific percussion onsets based on beat position and `pa_vel_perc`. Applies Add/Sub Filling stochastic subtraction (§4.1.2) with phrase-aligned sparseness rather than binary track mutes, preserving quiet, organic textures (~2–3 $pp$ events/measure) in low-tension states.
 
-### 4.3 Ratchet
-Inserts controlled rhythmic repetitions (subdivided bursts / "fill-in" patterns) at rule-selected points. Ratchet decisions are driven by the current parameter vector (e.g., ratchet chance from the interpolator).
+### 4.3 Ratchet (Exponential Crescendo Drum Rolls)
+Inserts controlled rhythmic repetitions (subdivided bursts) at rule-selected points. Ratchets follow an exponential crescendo curve ($\text{factor} = 0.30 + 0.70 \times (i / (N-1))^{1.2}$ in `play_ratchet()`) with duration protection ($\ge 0.35$s–0.45s) to guarantee clear, audible swells from $p$ to $f$.
 
 ### 4.4 Change (Percussion Change)
-Change-detection logic that **aligns percussion fills and pattern shifts with Harmony Agent chord changes**, preserving musical form at harmonic boundaries.
+Change-detection logic that **aligns percussion fills, rolls, and pattern shifts with Harmony Agent chord changes** (gated by Chord Pool 1 transitions), preserving musical form at harmonic boundaries.
 
 ### 4.5 MIDI Event Construction
-Outputs a **MIDI percussion stream** sent directly to the MIDI port (bypasses Orchestration Agent).
+Outputs a **MIDI percussion stream** sent directly to Channel 9 on the MIDI port / FluidSynth (bypasses Orchestration Agent).
 
 ---
 
 ## Module 5 — Orchestration Agent (OA)
 *(Paper: Fig. 5)*
 
-A downstream director that receives completed MIDI streams from MA and HA and manages instrument assignment, range enforcement, and orchestration switching.
+A downstream master orchestrator that receives completed MIDI streams from MA and HA and manages the **4x2 Dynamic Orchestral Matrix across 8 MIDI channels**, range enforcement with octave transposition, dynamic doubling/registration, and acoustic concert hall staging.
 
 > **Important:** The Orchestration Agent does NOT independently generate rhythm or receive seeds. It is a post-processing and routing layer for MA and HA output.
 
-### Inputs
+### 4x2 Orchestral Matrix & Channel Mapping (§6.2)
 
-| Input | Source |
-|---|---|
-| Melody MIDI stream | Module 2 (MA) |
-| Harmony MIDI stream | Module 3 (HA) |
-| Current loop index | Module 1 (Clock) |
-| Harmony pitches + chord info | Module 3 (HA) |
-| `{Orch +/− (MA)}` / `{Orch +/− (HA)}` flags | Interpolated parameters — add/remove instrument lines |
+| Channel | Stream | Family | GM Program | Default Patch |
+|---|---|---|---|---|
+| **Ch 0** | Melody | Strings | **48** | String Ensemble 1 |
+| **Ch 1** | Melody | Piano | **0** | Acoustic Grand Piano |
+| **Ch 2** | Melody | Woodwinds | **73** | Flute |
+| **Ch 3** | Melody | Brass | **61** | Brass Section |
+| **Ch 4** | Harmony | Strings | **48** | String Ensemble 1 |
+| **Ch 5** | Harmony | Piano | **0** | Acoustic Grand Piano |
+| **Ch 6** | Harmony | Woodwinds | **73** | Flute |
+| **Ch 7** | Harmony | Brass | **61** | Brass Section |
 
-### 5.1 Add/Subtract Instruments
+### 5.1 Add/Subtract Instruments & Doubling
 
-- **Melody lines:** adds or removes instrument doublings from the melody stream based on orchestration parameters.
-- **Harmony voices:** adds or removes voices/instruments from chord voicings, applying velocity and range constraints per voice.
+- **Melody Doubling (`ma_orch_plus_minus`):**
+  - $< 0.4$: Solo Strings (Ch 0).
+  - $0.4 \dots 0.8$: Strings + Woodwinds doubling (Ch 0, Ch 2).
+  - $\ge 0.8$: Tutti Strings + Woodwinds + Brass Section (Ch 0, Ch 2, Ch 3).
+- **Harmony Registration (`ha_register_ins`) & Density (`ha_ins_plus_minus`):**
+  - Hierarchical registration levels: Level 1.0 (Piano), Level 2.0 (Piano + Strings), Level 3.0 (Piano + Strings + Woodwinds), Level 4.0 (Tutti).
+  - Density scaled continuously via `ha_ins_plus_minus`.
 
-### 5.2 Switch Instruments
+### 5.2 Switch Instruments & Acoustic CC Staging
 
-Swaps the orchestration (which instruments play which lines) on loop boundaries or conditional triggers from the current loop index and HA chord data.
+Dispatches program changes for all 8 orchestral channels plus Channel 9 (`(9, 48)`), and continuously maintains concert hall acoustic balance:
+- **CC64 (Sustain)**: Value 127 on Piano channels (Ch 1 and Ch 5).
+- **CC7 (Volume)** & **CC10 (Pan)**: Establishes realistic orchestral stereo placement (Strings left, Piano center-left, Drums center, Woodwinds center-right, Brass right).
+- **CC91 (Reverb)**: Concert hall reverb send balance.
+- **CC11 (Expression)**: Continuous dynamic expression swells driven by layer weight interpolation.
 
-### 5.3 Range Melody Lines
+### 5.3 Range Enforcement & Octave Transposition
 
-Enforces **instrument pitch range constraints** on melody lines. Pitches outside an instrument's playable range are transposed by octave or re-assigned.
-
-### 5.4 Send / Receive Flags
-
-Coordinates with HA's Arpeggiator (3.3.5) for multi-instrument arpeggio distribution. Flags indicate which instruments are currently active for arpeggio participation.
-
-### 5.5 Instrument Ranges
-
-Applies per-instrument-family range rules across all active melody and harmony lines. Currently limited to **full-range instrument families**; modular expansion for virtual instruments is planned.
+Enforces instrument pitch range constraints across global ranges (`MELODY_RANGE`, `HARMONY_RANGE`) and family bounds (`FAMILY_RANGES`). Out-of-bounds notes are transposed by octaves ($\pm 12$ semitones) until they land within the instrument's playable range, preserving harmonic pitch identity.
 
 ### Output
 
@@ -354,14 +366,14 @@ A combined **MIDI stream** with explicit instrument channel assignments, sent to
 
 ---
 
-## Final Output — MIDI Port
+## Final Output — MIDI Output & Audio Synthesis
 
-Both output streams are routed to one or more MIDI ports (virtual synths, soft instruments, or external hardware):
+Both output streams are routed to MIDI ports (virtual loopback, DAWs) or directly rendered via native embedded FluidSynth (`--sf2`):
 
-| Stream | Source | Content |
-|---|---|---|
-| Main MIDI stream | Orchestration Agent (OA) | Melody + Harmony with instrument channel assignments |
-| Percussion MIDI stream | Percussion Agent (PA) | Drums — independent channel scope |
+| Stream | Source | Content | Channel Assignment |
+|---|---|---|---|
+| Main Orchestral Stream | Orchestration Agent (OA) | Melody + Harmony across 4 instrumental families | Channels 0–7 (Strings, Piano, Woodwinds, Brass) |
+| Percussion Stream | Percussion Agent (PA) | Cinematic Concert Percussion (Gran Cassa, Timpani, Snare, Cymbals) | Channel 9 (General MIDI Orchestra Kit, Program 48) |
 
 ---
 

@@ -1,7 +1,7 @@
 import math
 
 from dataclasses import fields
-from typing import Any, Iterable, List
+from typing import Any, Iterable, List, Optional
 
 from src.core.logger import Logger
 from src.models.preset import Preset
@@ -100,25 +100,14 @@ class MultiParameterPresetInterpolator:
     # Field classification sets
     # ------------------------------------------------------------------
 
-    # Scalar parameters that must not change mid-phrase (e.g. instrument
-    # programs that would cause audible clicks or re-triggers).
-    _DISCRETE_FIELDS = {
-        "melody_program",
-        "harmony_layer_mode",
-        "scale_mode",
-    }
+    _DISCRETE_FIELDS = set()
 
-    # List parameters that are safe to interpolate continuously element-wise
-    # (e.g. per-layer mix weights).
-    _LIST_INTERPOLATED_FIELDS = {
-        "harmony_layer_weights",
-    }
+    # List parameters that are safe to interpolate continuously element-wise.
+    _LIST_INTERPOLATED_FIELDS = set()
 
     # List parameters that are discrete per-element; snapped to the winning
     # preset at phrase boundaries (e.g. MIDI program per harmony layer).
-    _LIST_DISCRETE_FIELDS = {
-        "harmony_programs",
-    }
+    _LIST_DISCRETE_FIELDS = set()
 
     # ------------------------------------------------------------------
     # Construction
@@ -227,7 +216,7 @@ class MultiParameterPresetInterpolator:
         # Step 5 — return a safe copy so callers cannot mutate internal state.
         return self._copy_preset(self._state)
 
-    def get_quantized_state(self, phrase_start: bool = False) -> Preset:
+    def get_quantized_state(self, phrase_start: bool = False) -> Optional[Preset]:
         """
         Return the current state with pending discrete changes applied,
         but only at a phrase boundary.
@@ -259,6 +248,16 @@ class MultiParameterPresetInterpolator:
                     for field in self._fields
                 }
             )
+
+    def snap_to(self, x: float, y: float) -> Preset:
+        """
+        Immediately snap running and discrete state to (x, y) without smoothing.
+        Useful at startup or session reset.
+        """
+        target = self._blend(x, y)
+        self._state = self._copy_preset(target)
+        self._pending_discrete = self._copy_preset(target)
+        return self._copy_preset(self._state)
 
     # ------------------------------------------------------------------
     # Internal — spatial blending (XY pad)
@@ -549,23 +548,6 @@ class MultiParameterPresetInterpolator:
     def _list_fill_value(self, name: str) -> float:
         """
         Return the neutral/identity fill value for a list field.
-
-        Semantics:
-            • "harmony_layer_weights" → 1.0 (full weight = layer present).
-            • All other list-interpolated fields → 0.0 (absence / silence).
-            • "harmony_programs" is a list-discrete field and must never be
-              blended; calling this with that name raises ValueError to guard
-              against accidental misuse.
-
-        Args:
-            name (str): Field name from the Preset dataclass.
-
-        Returns:
-            float: 1.0 for harmony_layer_weights; 0.0 otherwise.
-
-        Raises:
-            ValueError: If called for "harmony_programs" (discrete list —
-                        blending program numbers is musically invalid).
         """
         if name == "harmony_programs":
             raise ValueError(
@@ -573,7 +555,7 @@ class MultiParameterPresetInterpolator:
                 "not be blended or smoothed."
             )
 
-        return 1.0 if name == "harmony_layer_weights" else 0.0
+        return 0.0
 
     # ------------------------------------------------------------------
     # Internal — deep copy helpers

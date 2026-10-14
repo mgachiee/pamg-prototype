@@ -5,6 +5,7 @@ Defines the canonical `MidiEvent` dataclass and helper functions that coerce
 raw event dictionaries into safe, typed values.
 """
 
+import math
 from typing import Optional
 from src.models.midi_event import MidiEvent
 
@@ -34,11 +35,12 @@ def normalize_event(
     if note is None:
         return None
 
-    # Coerce note into a valid integer.
+    # Coerce note into a valid integer and clamp to valid MIDI range [0, 127].
     try:
         note = int(note)
     except (TypeError, ValueError):
         return None
+    note = max(0, min(127, note))
 
     # Velocity defaults to 100 and is clamped into [1, 127].
     velocity = hit.get("velocity", 100)
@@ -52,9 +54,9 @@ def normalize_event(
     duration = hit.get("duration", default_duration)
     try:
         duration = float(duration)
+        if duration <= 0 or math.isnan(duration):
+            duration = default_duration
     except (TypeError, ValueError):
-        duration = default_duration
-    if duration <= 0:
         duration = default_duration
 
     # Channel defaults to the provided channel and is clamped into [0, 15].

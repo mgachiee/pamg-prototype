@@ -8,46 +8,47 @@ class Preset:
     """
     Defines a preset configuration for all agents and orchestration.
 
-    Each field represents a parameter used by the interpolator or the agents.
-    Continuous fields are blended across presets, while discrete fields are
-    snapped at phrase boundaries (see `core/preset_interpolator.py`).
-
-    The system uses four presets (A, B, C, D) mapped to Russell's Circumplex
-    Model of Affect:
-        - A: Quadrant 3 (Sad / Low Arousal, Negative Valence)
-        - B: Quadrant 4 (Calm / Low Arousal, Positive Valence)
-        - C: Quadrant 2 (Angry / High Arousal, Negative Valence)
-        - D: Quadrant 1 (Excited / High Arousal, Positive Valence)
+    Each field represents a parameter defined in the PAMG baseline technical reference:
+    - Melody Agent (MA) - §3.5
+    - Harmony Agent (HA) - §4.5
+    - Percussion Agent (PA) - §5.4
+    - Shared cross-agent parameters
     """
-    melody_max_step: float
-    melody_pitch_low: float
-    melody_pitch_high: float
-    melody_syncopation: float
-    melody_accent: float
-    melody_ratchet_probability: float
+    # Melody Agent (MA) - §3.5
+    ma_step: float
+    ma_range_low: float
+    ma_range_high: float
+    ma_velocity: float
+    ma_tac: float
+    ma_plus_minus_notes: float
+    ma_mv_even: float
+    ma_mv_odd: float
+    ma_orch_plus_minus: float
+    ma_orch_range_low: float
+    ma_orch_range_high: float
+    ma_trans: float
 
-    # Add more parameters for PA as needed, for example:
-    # crash_cymbal_probability, ride_cymbal_probability, etc.
-    drum_kick_probability: float
-    drum_ghost_kick_probability: float
-    drum_snare_probability: float
-    drum_hat_open_probability: float
-    drum_hat_closed_probability: float
-    drum_ratchet_probability: float
+    # Harmony Agent (HA) - §4.5
+    ha_tension: float
+    ha_cpx_prog: float
+    ha_plus_minus_notes: float
+    ha_acc_beat: float
+    ha_vel_ins: float
+    ha_voice_ins: float
+    ha_range_ins_low: float
+    ha_range_ins_high: float
+    ha_register_ins: float
+    ha_ins_plus_minus: float
+    ha_move: float
 
+    # Percussion Agent (PA) - §5.4
+    pa_vel_perc: float
+    pa_acc_beat_p: float
+    pa_ks_plus_minus: float
+    pa_toms_plus_minus: float
+    pa_cymb_plus_minus: float
+
+    # Shared
     seeded_phrase_length: float
-
-    harmony_tension: float
-    harmony_chord_complexity: float
-    harmony_chord_change_probability: float
-    harmony_add_probability: float
-    harmony_sub_probability: float
-    harmony_accent_probability: float
-
-    harmony_pitch_low: float
-    harmony_pitch_high: float
-    harmony_layer_weights: List[float]
-    harmony_programs: List[int]
-    melody_program: int
-    harmony_layer_mode: str
-    scale_mode: str
+    shape_depth: float
+    shape_length: float

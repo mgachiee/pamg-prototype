@@ -1,0 +1,300 @@
+import asyncio
+import json
+import pytest
+
+from src.core.tcp_server import start_tcp_server
+from src.models.game_state import GameState
+
+
+def test_tcp_server_updates_game_state_flat():
+    async def _run():
+        state = GameState(tempo=120, loop_size=4, grain=4, base_seed=42)
+        server = await start_tcp_server(host="127.0.0.1", port=9091, state=state)
+
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9091)
+            try:
+                # Send valid flat payload
+                payload = {
+                    "x": 0.85,
+                    "y": 0.15,
+                    "tempo": 140,
+                    "seed": 999,
+                    "loop_size": 8,
+                }
+                writer.write((json.dumps(payload) + "\n").encode("utf-8"))
+                await writer.drain()
+
+                resp_line = await reader.readline()
+                resp = json.loads(resp_line.decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert resp["x"] == 0.85
+                assert resp["y"] == 0.15
+                assert resp["tempo"] == 140
+                assert resp["seed"] == 999
+
+                # Check state mutations
+                assert state.x == 0.85
+                assert state.y == 0.15
+                assert state.tempo == 140
+                assert state.base_seed == 999
+                assert state.loop_size == 8
+                assert state.structure_dirty is True
+
+                # Send invalid JSON
+                writer.write(b"NOT_A_JSON_STRING\n")
+                await writer.drain()
+                err_resp_line = await reader.readline()
+                err_resp = json.loads(err_resp_line.decode("utf-8"))
+                assert err_resp["status"] == "error"
+
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_tcp_handshake_and_sidecar():
+    async def _run():
+        state = GameState()
+        server = await start_tcp_server(host="127.0.0.1", port=9092, state=state)
+
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9092)
+            try:
+                # Send handshake packet
+                handshake_packet = {"action": "handshake", "sidecar": True}
+                writer.write((json.dumps(handshake_packet) + "\n").encode("utf-8"))
+                await writer.drain()
+
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ready"
+                assert resp["engine_state"] == "ready"
+                assert resp["sidecar"] is True
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_tcp_telemetry_valence_arousal():
+    async def _run():
+        state = GameState()
+        server = await start_tcp_server(host="127.0.0.1", port=9093, state=state)
+
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9093)
+            try:
+                # Test normalized [-1, 1] range: V=1.0 -> x=1.0, A=-1.0 -> y=0.0
+                telemetry_packet = {
+                    "action": "telemetry",
+                    "valence": 1.0,
+                    "arousal": -1.0,
+                    "tempo": 128,
+                    "seed": 555,
+                }
+                writer.write((json.dumps(telemetry_packet) + "\n").encode("utf-8"))
+                await writer.drain()
+
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert state.x == 1.0
+                assert state.y == 0.0
+                assert state.tempo == 128
+                assert state.base_seed == 555
+
+                # Test centered V=0.0 -> x=0.5, A=0.0 -> y=0.5 (when negative was used)
+                telemetry_center = {
+                    "action": "telemetry",
+                    "valence": -0.5,
+                    "arousal": 0.5,
+                }
+                writer.write((json.dumps(telemetry_center) + "\n").encode("utf-8"))
+                await writer.drain()
+
+                resp2 = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp2["status"] == "ok"
+                assert abs(state.x - 0.25) < 1e-4
+                assert abs(state.y - 0.75) < 1e-4
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_tcp_telemetry_time_signatures():
+    async def _run():
+        state = GameState()
+        server = await start_tcp_server(host="127.0.0.1", port=9094, state=state)
+
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9094)
+            try:
+                # 1. 3/4 meter
+                packet_34 = {
+                    "action": "telemetry",
+                    "macro_state": {"music_config": {"time_signature": "3/4"}},
+                }
+                writer.write((json.dumps(packet_34) + "\n").encode("utf-8"))
+                await writer.drain()
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert state.loop_size == 3
+                assert state.grain == 4
+                assert state.time_signature == "3/4"
+
+                # 2. 6/8 meter
+                packet_68 = {
+                    "action": "telemetry",
+                    "macro_state": {"music_config": {"time_signature": "6/8"}},
+                }
+                writer.write((json.dumps(packet_68) + "\n").encode("utf-8"))
+                await writer.drain()
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert state.loop_size == 6
+                assert state.grain == 2
+                assert state.time_signature == "6/8"
+
+                # 3. 6/4 meter
+                packet_64 = {
+                    "action": "telemetry",
+                    "macro_state": {"music_config": {"time_signature": "6/4"}},
+                }
+                writer.write((json.dumps(packet_64) + "\n").encode("utf-8"))
+                await writer.drain()
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert state.loop_size == 6
+                assert state.grain == 4
+                assert state.time_signature == "6/4"
+
+                # 4. 4/4 meter
+                packet_44 = {
+                    "action": "telemetry",
+                    "macro_state": {"music_config": {"time_signature": "4/4"}},
+                }
+                writer.write((json.dumps(packet_44) + "\n").encode("utf-8"))
+                await writer.drain()
+                resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resp["status"] == "ok"
+                assert state.loop_size == 4
+                assert state.grain == 4
+                assert state.time_signature == "4/4"
+
+                # Invalid time signature returns error
+                packet_invalid = {
+                    "action": "telemetry",
+                    "macro_state": {"music_config": {"time_signature": "11/8"}},
+                }
+                writer.write((json.dumps(packet_invalid) + "\n").encode("utf-8"))
+                await writer.drain()
+                err_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert err_resp["status"] == "error"
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_tcp_lifecycle_actions():
+    async def _run():
+        state = GameState()
+        server = await start_tcp_server(host="127.0.0.1", port=9095, state=state)
+
+        async with server:
+            reader, writer = await asyncio.open_connection("127.0.0.1", 9095)
+            try:
+                # 1. Status query (initial state is paused in standby)
+                writer.write(b'{"action": "status"}\n')
+                await writer.drain()
+                status_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert status_resp["status"] == "ok"
+                assert status_resp["engine_state"] == "paused"
+
+                # 2. Resume
+                writer.write(b'{"action": "resume"}\n')
+                await writer.drain()
+                resume_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert resume_resp["status"] == "resumed"
+                assert state.paused is False
+
+                # 3. Pause
+                writer.write(b'{"action": "pause"}\n')
+                await writer.drain()
+                pause_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert pause_resp["status"] == "paused"
+                assert state.paused is True
+
+                # 4. Reset
+                state.x = 0.9
+                writer.write(b'{"action": "reset"}\n')
+                await writer.drain()
+                reset_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert reset_resp["status"] == "ok"
+                assert state.x is None
+
+                # 5. Shutdown
+                writer.write(b'{"action": "shutdown"}\n')
+                await writer.drain()
+                shut_resp = json.loads((await reader.readline()).decode("utf-8"))
+                assert shut_resp["status"] == "shutting_down"
+                assert state.is_alive is False
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    asyncio.run(_run())
+
+
+def test_end_to_end_test_client_all_phases(dummy_port):
+    from unittest.mock import patch
+    import threading
+    from src.core.clock import run_clock
+    from src.core.routing import RoutingType
+    from test_client import run_automated_flow
+
+    state = GameState()
+
+    async def _start_server_and_clock():
+        server = await start_tcp_server(host="127.0.0.1", port=9096, state=state)
+        clock_task = asyncio.create_task(
+            run_clock(
+                tempo=360,
+                loop_size=4,
+                grain=4,
+                routing_mode=RoutingType.single_port,
+                game_state=state,
+            )
+        )
+        return server, clock_task
+
+    async def _main():
+        with patch("src.core.clock.open_midi_ports", return_value=(dummy_port, dummy_port)):
+            server, clock_task = await _start_server_and_clock()
+            async with server:
+                # Run the automated client flow in a separate thread
+                client_thread = threading.Thread(
+                    target=run_automated_flow,
+                    kwargs={
+                        "host": "127.0.0.1",
+                        "port": 9096,
+                        "measures_per_phase": 1,
+                        "test_pause": True,
+                        "shutdown": True,
+                    },
+                )
+                client_thread.start()
+                await asyncio.to_thread(client_thread.join)
+                # Wait for clock to exit cleanly on shutdown
+                await clock_task
+
+        assert state.is_alive is False
+        assert dummy_port.closed is True
+
+    asyncio.run(_main())
+

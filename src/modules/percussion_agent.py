@@ -49,62 +49,58 @@ class PercussionAgent:
 
         self.midi_channel = 9  # Standard MIDI channel for percussion
 
-        # Standard General MIDI Drum Map Values
-        self.KICK = 36
-        self.SNARE = 38
-        self.HIHAT_CLOSED = 42
-        self.HIHAT_OPEN = 46
-        self.TOM_LOW = 45
-        self.TOM_MID = 48
-        self.TOM_HIGH = 50
-        self.CYMBAL = 49
-        self.RIDE = 51
-        self.RIDE_BELL = 53
-        self.CRASH = 49
+        # Standard General MIDI Drum Map Values (Kick, Snare, Toms, Cymbals - baseline §2.1)
+        # Program 48: General MIDI Orchestra Kit
+        self.KICK = 36          # Concert Bass Drum (Gran Cassa)
+        self.SNARE = 38         # Concert Snare
+        self.SNARE_ROLL = 40    # Concert Snare Roll
+        self.SIDE_STICK = 37    # Side Stick / Rimshot
+        self.TOM_LOW = 45       # Timpani A
+        self.TOM_MID = 48       # Timpani c
+        self.TOM_HIGH = 50      # Timpani d
+        self.CYMBAL = 42        # Closed / Suspended Cymbal
+        self.CRASH = 57         # Concert Cymbal 2
 
-        # Probabilities for adding variation to the groove
-        self.kick_add_prob = 0.10  # Chance to add a syncopated kick
-        self.kick_sub_prob = 0.15  # Chance to drop a main kick
-        self.ghost_kick_prob = 0.08  # Chance to add a non-accented "ghost" kick on off-beats
+        # Baseline parameters (§5.4)
+        self.pa_vel_perc = 90.0
+        self.pa_acc_beat_p = 0.5
+        self.pa_ks_plus_minus = 0.0
+        self.pa_toms_plus_minus = 0.0
+        self.pa_cymb_plus_minus = 0.0
 
-        self.snare_add_prob = 0.05  # Chance to add a ghost snare
-        self.snare_sub_prob = 0.0   # Chance to drop the snare (keep backbeat steady)
-
-        self.hat_closed_prob = 0.90  # Chance to play closed hi-hat (vs open)
-        self.hat_open_prob = 0.10    # Chance to play open hi-hat
-        self.hat_density = max(1, grain // 2)  # Default hi-hat density (e.g. eighth notes)
-        self.hat_ratchet_prob = 0.03  # Chance to add a hi-hat ratchet
-
+        # Algorithmic prob/variation attributes
+        self.kick_add_prob = 0.0
+        self.kick_sub_prob = 0.0
+        self.ghost_kick_prob = 0.05
+        self.snare_add_prob = 0.0
+        self.snare_sub_prob = 0.0
         self.kick_ratchet_prob = 0.0
         self.snare_ratchet_prob = 0.0
 
-        self.crash_prob_start = 0.12  # Chance to start a crash cymbal on the first beat of the loop
-        self.crash_on_fill_prob = 0.85    # Chance to add a crash at the start of a tom fill
-
-        self.ride_prob = 0.18 # Per-bar chance to enable a ride-pattern replacement for hi-hats
-        self.ride_density = max(1, grain // 2)  # How dense the ride pattern is (e.g. every 2 subdivisions for eighth notes)
-        self.ride_bell_prob = 0.06 # Chance to hit the bell of the ride cymbal instead of the bow for added variation
-        self._ride_mode = False
+        self.cymb_prob_start = 0.10
+        self.cymb_on_fill_prob = 0.75
         
-        # Templates for tom fills that can be triggered on the last beat of the loop, with some randomness for variation
+        # Templates for tom fills
         self.tom_templates = {
             "basic_fill": [self.TOM_LOW, self.TOM_MID, self.TOM_HIGH],
             "reverse_fill": [self.TOM_HIGH, self.TOM_MID, self.TOM_LOW],
             "random_fill": self._random_tom_template,
         }
-        self.tom_fill_prob = 0.35  # Chance to add a tom fill on the last beat of the loop
-        self.tom_fill_window = max(1, grain // 2)  # How many subdivisions before the end of the loop to start adding tom fills
-        self.tom_leadin_prob = 0.25  # Chance to add a lead-in hit before the main fill on the last beat of the loop
-        self.tom_roll_prob = 0.15  # Chance to turn a tom fill into a rapid roll (e.g. 6 hits instead of 3)
+        self.tom_fill_prob = 0.35
+        self.tom_fill_window = max(1, grain // 2)
+        self.tom_leadin_prob = 0.25
+        self.tom_roll_prob = 0.15
         self.phrase_length = max(1, phrase_length)
         self.phrase_fill_prob = 0.65
         self._loop_index = 0
+        self._phrase_start = True
         self._phrase_end = False
         self._pending_phrase_fill = False
+        self._last_chord_pool: Optional[int] = None
         self._accent_beats = set()
 
         self.accent_velocity_range = (100, 127)
-        self.normal_velocity_range = (50, 99)
+        self.normal_velocity_range = (60, 95)
         self.ghost_velocity_range = (35, 60)
         self.tom_fill_velocity_range = (60, 100)
         self.tom_leadin_velocity_range = (45, 70)
@@ -127,8 +123,10 @@ class PercussionAgent:
         self._loop_index = max(0, int(loop_index))
         if self.phrase_length <= 1:
             self._phrase_end = True
+            self._phrase_start = True
         else:
             self._phrase_end = (self._loop_index % self.phrase_length) == (self.phrase_length - 1)
+            self._phrase_start = (self._loop_index % self.phrase_length) == 0
         self.add_sub_filling()
 
     # ------------------------------------------------------------------
@@ -156,11 +154,15 @@ class PercussionAgent:
         return list(template)
 
     def _build_tom_fill_plan(self) -> dict:
-        base_prob = max(0.0, min(1.0, self.tom_fill_prob))
+        # Gate fills by pa_toms_plus_minus (§5.3 / §5.4)
+        if self.pa_toms_plus_minus <= 0:
+            return {}
+
+        base_prob = max(0.0, min(1.0, self.tom_fill_prob * max(0.0, self.pa_toms_plus_minus)))
         if self._phrase_end:
-            base_prob = max(base_prob, max(0.0, min(1.0, self.phrase_fill_prob)))
+            base_prob = max(base_prob, max(0.0, min(1.0, self.phrase_fill_prob * max(0.0, self.pa_toms_plus_minus))))
         if self._pending_phrase_fill:
-            base_prob = max(base_prob, max(0.0, min(1.0, self.phrase_fill_prob)))
+            base_prob = max(base_prob, max(0.0, min(1.0, self.phrase_fill_prob * max(0.0, self.pa_toms_plus_minus))))
             self._pending_phrase_fill = False
         if base_prob <= 0 or self.rng.random() >= base_prob:
             return {}
@@ -198,51 +200,49 @@ class PercussionAgent:
                 self._build_midi(lead_note, is_accent=False, velocity_range=self.tom_leadin_velocity_range)
             )
 
-        if events_by_index and self.rng.random() < self.crash_on_fill_prob:
-            events_by_index.setdefault(fill_start_idx, []).append(self._build_midi(self.CRASH, is_accent=False))
+        cymb_fill_prob = self.cymb_on_fill_prob * max(0.0, self.pa_cymb_plus_minus) if self.pa_cymb_plus_minus > 0 else 0.0
+        if events_by_index and self.rng.random() < cymb_fill_prob:
+            cymb_note = self.CRASH if self.pa_cymb_plus_minus > 0.5 else self.CYMBAL
+            events_by_index.setdefault(fill_start_idx, []).append(self._build_midi(cymb_note, is_accent=False))
 
-        if events_by_index and self.rng.random() < self.tom_roll_prob:
-            roll_count = 6 if self.grain >= 3 else 3
-            for event in events_by_index.get(last_beat_start + max(positions), []):
-                if event.get("note") in (self.TOM_LOW, self.TOM_MID, self.TOM_HIGH):
-                    event["is_ratchet"] = True
-                    event["ratchet_count"] = roll_count
+        if events_by_index:
+            roll_prob = max(0.40, min(0.90, self.tom_roll_prob + max(0.0, self.pa_toms_plus_minus) * 0.5))
+            if self.rng.random() < roll_prob:
+                roll_count = 6 if self.grain >= 3 else 4
+                for event in events_by_index.get(last_beat_start + max(positions), []):
+                    if event.get("note") in (self.TOM_LOW, self.TOM_MID, self.TOM_HIGH):
+                        event["is_ratchet"] = True
+                        event["ratchet_count"] = roll_count
+                        event["duration"] = 0.45
 
         return events_by_index
 
     def _accent_beat_follower(self, beat: int, subdivision: int) -> tuple:
-        # Dynamic beat templates based on the current loop size and grain (time signature and subdivision)
+        # Dynamic beat templates based on current loop size and grain (time signature and subdivision)
         percussion_template = PERCUSSION_TEMPLATE.get(self._get_template_key(), {})
 
         if not percussion_template:
             fallback_kick = [0]
             fallback_snare = [self.loop_size // 2] if self.loop_size >= 2 else []
-            fallback_hihat = list(range(self.loop_size))
             percussion_template = {
                 "KICK": fallback_kick,
                 "SNARE": fallback_snare,
-                "HIHAT": fallback_hihat,
                 "TOM": [],
-                "RIDE": [],
-                "CRASH": [],
+                "CYMBAL": [0] if self.loop_size > 0 else [],
             }
 
         kick_beats = percussion_template.get("KICK", [])
         snare_beats = percussion_template.get("SNARE", [])
-        hihat_beats = percussion_template.get("HIHAT", [])
         tom_beats = percussion_template.get("TOM", [])
-        ride_beats = percussion_template.get("RIDE", [])
-        crash_beats = percussion_template.get("CRASH", [])
+        cymbal_beats = percussion_template.get("CYMBAL", [])
 
-        # Accent/Beat Follower
+        # 4 Baseline rows: Kick, Snare, Toms, Cymbals (§2.1)
         is_kick_beat = (subdivision == 0 and beat in kick_beats)
         is_snare_beat = (subdivision == 0 and beat in snare_beats)
-        is_hihat_beat = (beat in hihat_beats)
         is_tom_beat = (subdivision == 0 and beat in tom_beats)
-        is_ride_beat = (beat in ride_beats)
-        is_crash_beat = (subdivision == 0 and beat in crash_beats)
+        is_cymbal_beat = (subdivision == 0 and beat in cymbal_beats)
 
-        return is_kick_beat, is_snare_beat, is_hihat_beat, is_tom_beat, is_ride_beat, is_crash_beat
+        return is_kick_beat, is_snare_beat, is_tom_beat, is_cymbal_beat
 
     # ------------------------------------------------------------------
     # Accent and chord notifications
@@ -262,31 +262,45 @@ class PercussionAgent:
         Args:
             chord_pool (int): Current harmony chord pool identifier.
         """
-        if int(chord_pool) == 1:
+        pool_val = int(chord_pool)
+        if pool_val == 1 and self._last_chord_pool is not None and self._last_chord_pool != 1:
             self._pending_phrase_fill = True
+        self._last_chord_pool = pool_val
     
-    def _add_sub_filling(self, beat: int, subdivision: int) -> list:
+    def _add_sub_filling(
+        self,
+        beat: int,
+        subdivision: int,
+        scheduled_snares: Optional[set] = None,
+    ) -> list:
         """
-        Adds sub-fill events based on the current beat and subdivision. 
-        This can include ghost notes, anticipatory hits, and fills.
+        Adds sub-fill events based on the current beat and subdivision.
+        This includes ghost notes and anticipatory hits.
 
         Args:
             beat (int): The current beat number in the loop.
             subdivision (int): The current subdivision within the beat.
+            scheduled_snares (Optional[set]): Set of tick indices with planned snares.
 
         Returns:
             list: A list of MIDI events to be added as sub-fills.
         """
         events = []
 
-        # anticipatory ghost/snare just before a snare beat
+        # Anticipatory ghost/snare just before a scheduled snare beat
         lookback = max(1, self.grain // 4)
-        if (beat % 2 == 1) and subdivision >= (self.grain - lookback) and self.rng.random() < 0.25:
-            events.append(self._build_midi(self.SNARE, is_accent=False, velocity_range=self.ghost_velocity_range))
+        next_beat_downbeat = (beat + 1) * self.grain
+        if scheduled_snares is not None:
+            has_upcoming_snare = (
+                next_beat_downbeat in scheduled_snares
+                or (beat == self.loop_size - 1 and 0 in scheduled_snares)
+            )
+        else:
+            has_upcoming_snare = (beat % 2 == 1)
 
-        # occasional hi-hat ratchet (rapid subdivision)
-        if self.rng.random() < self.hat_ratchet_prob:
-            events.append(self._build_midi(self.HIHAT_CLOSED, is_accent=False, is_ratchet=True))
+        if has_upcoming_snare and subdivision >= (self.grain - lookback) and self.rng.random() < 0.25:
+            ghost_note = self.SIDE_STICK if self.pa_vel_perc < 60.0 else self.SNARE
+            events.append(self._build_midi(ghost_note, is_accent=False, velocity_range=self.ghost_velocity_range))
 
         return events
 
@@ -314,7 +328,7 @@ class PercussionAgent:
     # Event generation
     # ------------------------------------------------------------------
 
-    def process_tick(self, index: int):
+    def process_tick(self, index: int) -> list:
         """Generate percussion events for a single clock tick.
 
         Args:
@@ -323,146 +337,207 @@ class PercussionAgent:
         Returns:
             list: Raw percussion event dictionaries.
         """
-        events = []
-        
-        # =============== Rhythm Generation ===============
-        # Determine exactly where we are in the loop based on the index
-        beat = index // self.grain
-        subdivision = index % self.grain
-        
-        # =============== Accent/Beat Follower ===============
-        # Get the accent/beat follower results
-        is_kick_beat, is_snare_beat, is_hihat_beat, is_tom_beat, is_ride_beat, is_crash_beat = self._accent_beat_follower(beat, subdivision)
-
-        # =============== Base Groove Generation ===============
-        # Generate the base groove events based on the beat follower results and add/sub filling probabilities
-        accent_here = (beat in self._accent_beats) and subdivision == 0
-
-        if is_kick_beat:
-            if self.rng.random() >= self.kick_sub_prob: # 85% chance to play the main kick on the downbeat
-                is_ratchet = self.rng.random() < self.kick_ratchet_prob
-                events.append(
-                    self._build_midi(
-                        self.KICK,
-                        is_accent=True,
-                        is_ratchet=is_ratchet,
-                    )
-                )
-        else:
-            if subdivision != 0:
-                roll = self.rng.random()
-                if roll < self.ghost_kick_prob:
-                    events.append(
-                        self._build_midi(self.KICK, is_accent=False, velocity_range=self.ghost_velocity_range)
-                    )
-                elif roll < (self.ghost_kick_prob + self.kick_add_prob):
-                    events.append(
-                        self._build_midi(self.KICK, is_accent=accent_here)
-                    )
-
-        if is_snare_beat:
-            if self.rng.random() >= self.snare_sub_prob:
-                is_ratchet = self.rng.random() < self.snare_ratchet_prob
-                events.append(
-                    self._build_midi(
-                        self.SNARE,
-                        is_accent=True,
-                        is_ratchet=is_ratchet,
-                    )
-                )
-        else:
-            if subdivision != 0 and self.rng.random() < self.snare_add_prob: # 5% chance to add a ghost snare on off-beats
-                events.append(
-                    self._build_midi(
-                        self.SNARE,
-                        is_accent=accent_here,
-                        velocity_range=self.ghost_velocity_range,
-                    )
-                )
-
-        if self._ride_mode and is_ride_beat and subdivision % self.ride_density == 0:
-            if self.rng.random() < self.ride_bell_prob:
-                events.append(self._build_midi(self.RIDE_BELL, is_accent=False))
-            else:
-                events.append(self._build_midi(self.RIDE, is_accent=False))
-        elif is_hihat_beat and subdivision % self.hat_density == 0:
-            hat_total = self.hat_open_prob + self.hat_closed_prob
-            if hat_total <= 0:
-                hat_note = self.HIHAT_CLOSED
-            elif self.rng.random() < (self.hat_open_prob / hat_total):
-                hat_note = self.HIHAT_OPEN
-            else:
-                hat_note = self.HIHAT_CLOSED
-            events.append(self._build_midi(hat_note, is_accent=False))
-
-        if is_tom_beat:
-            events.append(
-                self._build_midi(
-                    self.rng.choice([self.TOM_LOW, self.TOM_MID, self.TOM_HIGH]),
-                    is_accent=True,
-                )
-            )
-
-        if is_crash_beat or (beat == 0 and subdivision == 0 and self.rng.random() < self.crash_prob_start):
-            events.append(self._build_midi(self.CRASH, is_accent=False))
-
-        # =============== Add/Sub Filling ===============
-        # Merge in any sub-fill events for this tick
-        events.extend(self.subfills.get(index, []))
-
-        return events
+        return list(self.subfills.get(index, []))
 
     # ------------------------------------------------------------------
-    # Precomputed fills
+    # Precomputed onset grid and fills
     # ------------------------------------------------------------------
 
-    def add_sub_filling(self):
+    def _plan_loop(self) -> dict:
         """
-        Precompute sub-fill events for the entire loop and store them in self.subfills.
-        Returns a dict mapping absolute tick index -> list of events.
+        Precompute the complete onset grid and fill events for the loop.
+        Aligned with technical-reference.md §2.1 and §5.1 (Kick, Snare, Toms, Cymbals).
         """
         total_ticks = self.loop_size * self.grain
-        subfills = {}
-        self._ride_mode = self.rng.random() < self.ride_prob
-        tom_fill_plan = self._build_tom_fill_plan()
+        planned_events = {idx: [] for idx in range(total_ticks)}
+
+        # Update velocity ranges based on pa_vel_perc (§4.2 / §5.4)
+        base_vel = int(round(self.pa_vel_perc))
+        self.normal_velocity_range = (max(1, base_vel - 15), min(127, base_vel + 10))
+        self.accent_velocity_range = (max(1, base_vel), min(127, base_vel + 20))
+        self.ghost_velocity_range = (max(1, int(round(base_vel * 0.55))), max(1, int(round(base_vel * 0.75))))
+        self.tom_fill_velocity_range = (max(1, int(round(base_vel * 0.75))), min(127, int(round(base_vel * 1.15))))
+        self.tom_leadin_velocity_range = (max(1, int(round(base_vel * 0.60))), min(127, int(round(base_vel * 0.90))))
+
+        # 1. Base groove generation across the Count Loop index grid
+        scheduled_snares = set()
         for idx in range(total_ticks):
             beat = idx // self.grain
             subdivision = idx % self.grain
-            events = self._add_sub_filling(beat, subdivision)
-            events.extend(tom_fill_plan.get(idx, []))
-            if events:
-                subfills[idx] = events
+            is_kick_beat, is_snare_beat, is_tom_beat, is_cymbal_beat = (
+                self._accent_beat_follower(beat, subdivision)
+            )
+            # Accent/Beat Follower (§4.1.1, §5.4 pa_acc_beat_p)
+            accent_here = (subdivision == 0) and (
+                (beat in self._accent_beats) or (self.rng.random() < self.pa_acc_beat_p)
+            )
 
-        self.subfills = subfills
-        return subfills
+        ks_delta = self.pa_ks_plus_minus
+        tom_delta = self.pa_toms_plus_minus
+        cymb_delta = self.pa_cymb_plus_minus
 
-    def get_lookahead(self, current_tick: int, lookahead_ticks: int) -> List[int]:
-        """
-        Query upcoming percussion onsets (of any instrument) within a window.
+        # Layering gating per Technical Reference §5.3:
+        # Layering is simply however many of the four onset rows (Kick, Snare, Toms, Cymbals) are active.
+        toms_active = tom_delta > -0.7
+        cymbals_active = cymb_delta > -0.7
+        snare_active = ks_delta > -0.7
+        kick_active = ks_delta > -0.95
+        snare_note = self.SIDE_STICK if (self.pa_vel_perc < 60.0 or ks_delta < 0) else self.SNARE
 
-        Args:
-            current_tick (int): Starting index for the query.
-            lookahead_ticks (int): Number of ticks to look ahead.
-
-        Returns:
-            List[int]: Relative indices (within the window) of planned onsets.
-        """
-        onsets = []
-        for i in range(lookahead_ticks):
-            idx = (current_tick + i) % self.total_pulses
-            # Check precomputed subfills (which include fills and ratchets)
-            if self.subfills.get(idx):
-                onsets.append(i)
-                continue
-            
-            # Check base grid pattern
+        scheduled_snares = set()
+        for idx in range(total_ticks):
             beat = idx // self.grain
             subdivision = idx % self.grain
-            states = self._accent_beat_follower(beat, subdivision)
-            if any(states):
-                onsets.append(i)
+            is_kick_beat, is_snare_beat, is_tom_beat, is_cymbal_beat = (
+                self._accent_beat_follower(beat, subdivision)
+            )
+            # Accent/Beat Follower (§4.1.1, §5.4 pa_acc_beat_p)
+            accent_here = (subdivision == 0) and (
+                (beat in self._accent_beats) or (self.rng.random() < self.pa_acc_beat_p)
+            )
 
-        return onsets
+            # Row 1: Kick
+            if kick_active:
+                if is_kick_beat:
+                    if ks_delta < 0 and beat != 0:
+                        # Negative ks_delta reduces kick to downbeat anchor pulse (beat 0)
+                        pass
+                    elif ks_delta < -0.3 and not (self._phrase_start or (self._loop_index % 2 == 0)):
+                        # In deep ambient/subdued states, pulse every 2 measures or on phrase start
+                        pass
+                    else:
+                        kick_sub = max(0.0, -ks_delta * 0.5) if (ks_delta < 0 and beat == 0) else 0.0
+                        if self.rng.random() >= kick_sub:
+                            is_ratchet = self.rng.random() < self.kick_ratchet_prob
+                            planned_events[idx].append(
+                                self._build_midi(
+                                    self.KICK,
+                                    is_accent=(accent_here or beat == 0),
+                                    is_ratchet=is_ratchet,
+                                )
+                            )
+                elif ks_delta > 0 and subdivision != 0:
+                    roll = self.rng.random()
+                    if roll < self.ghost_kick_prob:
+                        planned_events[idx].append(
+                            self._build_midi(
+                                self.KICK,
+                                is_accent=False,
+                                velocity_range=self.ghost_velocity_range,
+                            )
+                        )
+                    elif roll < (self.ghost_kick_prob + ks_delta * 0.4):
+                        planned_events[idx].append(
+                            self._build_midi(self.KICK, is_accent=accent_here)
+                        )
+
+            # Row 2: Snare
+            if snare_active:
+                if is_snare_beat:
+                    if ks_delta < 0 and not self._phrase_end:
+                        # In calm/negative-delta states, suppress mid-phrase pop backbeats;
+                        # only punctuate cadences at phrase ends
+                        pass
+                    else:
+                        snare_sub = max(0.0, -ks_delta) if ks_delta < 0 else 0.0
+                        if self.rng.random() >= snare_sub:
+                            is_phrase_roll = self._phrase_end and ks_delta > 0.2 and self.pa_vel_perc >= 60.0 and self.rng.random() < 0.60
+                            is_ratchet = is_phrase_roll or (self.rng.random() < self.snare_ratchet_prob)
+                            chosen_note = self.SNARE_ROLL if (is_phrase_roll and self.rng.random() < 0.40) else snare_note
+                            ev = self._build_midi(
+                                chosen_note,
+                                is_accent=accent_here,
+                                is_ratchet=is_ratchet,
+                                ratchet_count=6 if is_phrase_roll else 4,
+                            )
+                            if is_phrase_roll:
+                                ev["duration"] = 0.45
+                            planned_events[idx].append(ev)
+                            scheduled_snares.add(idx)
+                elif ks_delta > 0 and subdivision != 0:
+                    if self.rng.random() < ks_delta * 0.4:
+                        planned_events[idx].append(
+                            self._build_midi(
+                                snare_note,
+                                is_accent=accent_here,
+                                velocity_range=self.ghost_velocity_range,
+                            )
+                        )
+
+            # Row 3: Toms (+/- Toms control §5.4)
+            if toms_active:
+                if is_tom_beat:
+                    if tom_delta < 0 and not self._phrase_end:
+                        # In calm/negative-delta states, suppress routine beat 3 tom hits;
+                        # only prepare phrase boundaries
+                        pass
+                    else:
+                        tom_sub = max(0.0, -tom_delta * 0.7) if tom_delta < 0 else 0.0
+                        if self.rng.random() >= tom_sub:
+                            planned_events[idx].append(
+                                self._build_midi(
+                                    self.rng.choice([self.TOM_LOW, self.TOM_MID, self.TOM_HIGH]),
+                                    is_accent=True,
+                                )
+                            )
+                elif subdivision != 0 and tom_delta > 0 and self.rng.random() < tom_delta * 0.4:
+                    planned_events[idx].append(
+                        self._build_midi(
+                            self.rng.choice([self.TOM_LOW, self.TOM_MID, self.TOM_HIGH]),
+                            is_accent=accent_here,
+                        )
+                    )
+
+            # Row 4: Cymbals (+/- Cymb control §5.4)
+            if cymbals_active:
+                if is_cymbal_beat or (beat == 0 and subdivision == 0 and self.rng.random() < self.cymb_prob_start):
+                    if cymb_delta < 0 and not self._phrase_start:
+                        # In calm/negative-delta states, restrict cymbal color strictly to phrase entrances
+                        pass
+                    else:
+                        cymb_sub = max(0.0, -cymb_delta * 0.7) if cymb_delta < 0 else 0.0
+                        if self.rng.random() >= cymb_sub:
+                            planned_events[idx].append(
+                                self._build_midi(self.CYMBAL, is_accent=accent_here)
+                            )
+                elif subdivision != 0 and cymb_delta > 0 and self.rng.random() < cymb_delta * 0.3:
+                    planned_events[idx].append(
+                        self._build_midi(self.CYMBAL, is_accent=False)
+                    )
+
+        # 2. Add anticipatory ghost notes and fill plans
+        if snare_active and ks_delta >= 0 and self.pa_vel_perc >= 60.0:
+            for idx in range(total_ticks):
+                beat = idx // self.grain
+                subdivision = idx % self.grain
+                sub_events = self._add_sub_filling(beat, subdivision, scheduled_snares=scheduled_snares)
+                planned_events[idx].extend(sub_events)
+
+        if toms_active:
+            tom_fill_plan = self._build_tom_fill_plan()
+            for idx in range(total_ticks):
+                planned_events[idx].extend(tom_fill_plan.get(idx, []))
+
+        self.subfills = planned_events
+        return planned_events
+
+    def add_sub_filling(self) -> dict:
+        """
+        Precompute onset grid and sub-fill events for the entire loop.
+        Returns a dict mapping absolute tick index -> list of events.
+        """
+        return self._plan_loop()
+
+    def get_lookahead(self, current_index: int, lookahead_steps: int) -> List[bool]:
+        """
+        Return a boolean list indicating planned percussion onsets for the upcoming ticks.
+        """
+        results = []
+        for step in range(lookahead_steps):
+            tick = (current_index + step) % self.total_pulses
+            has_hit = bool(self.subfills.get(tick))
+            results.append(has_hit)
+        return results
 
     # ------------------------------------------------------------------
     # Parameter updates
@@ -485,6 +560,14 @@ class PercussionAgent:
         def clamp_int(value: int, minimum: int = 1) -> int:
             return max(minimum, int(value))
 
+        baseline_float_fields = {
+            "pa_vel_perc",
+            "pa_acc_beat_p",
+            "pa_ks_plus_minus",
+            "pa_toms_plus_minus",
+            "pa_cymb_plus_minus",
+        }
+
         prob_fields = {
             "kick_add_prob",
             "kick_sub_prob",
@@ -493,13 +576,8 @@ class PercussionAgent:
             "snare_add_prob",
             "snare_sub_prob",
             "snare_ratchet_prob",
-            "hat_open_prob",
-            "hat_closed_prob",
-            "hat_ratchet_prob",
-            "crash_prob_start",
-            "crash_on_fill_prob",
-            "ride_prob",
-            "ride_bell_prob",
+            "cymb_prob_start",
+            "cymb_on_fill_prob",
             "tom_fill_prob",
             "tom_leadin_prob",
             "tom_roll_prob",
@@ -507,23 +585,43 @@ class PercussionAgent:
         }
 
         int_fields = {
-            "hat_density",
-            "ride_density",
             "tom_fill_window",
             "phrase_length",
         }
 
         for key, value in kwargs.items():
-            if key == "seed":
-                self.rng.seed(value)
+            if key == "seed_state" and value is not None:
+                self.rng.seed(int(value.rhythm_seed))
+                changed = True
+                continue
+            if key == "rhythm_seed" and value is not None:
+                self.rng.seed(int(value))
+                changed = True
+                continue
+            if key == "seed" and value is not None:
+                self.rng.seed(int(value))
                 changed = True
                 continue
             if key == "meter":
                 self.meter = value
                 changed = True
                 continue
+            if key == "loop_size" and value is not None:
+                new_loop = max(1, int(value))
+                if new_loop != self.loop_size:
+                    self.loop_size = new_loop
+                    changed = True
+                continue
+            if key == "grain" and value is not None:
+                new_grain = max(1, int(value))
+                if new_grain != self.grain:
+                    self.grain = new_grain
+                    changed = True
+                continue
 
-            if key in prob_fields:
+            if key in baseline_float_fields:
+                new_value = float(value)
+            elif key in prob_fields:
                 new_value = clamp_prob(value)
             elif key in int_fields:
                 new_value = clamp_int(value)
@@ -535,6 +633,7 @@ class PercussionAgent:
                 changed = True
 
         if changed:
+            self.total_pulses = self.loop_size * self.grain
             self.phrase_length = max(1, int(self.phrase_length))
             self.add_sub_filling()
 
@@ -552,20 +651,20 @@ class PercussionAgent:
             events (list): List of MIDI events for a loop. Each event should
                 include a `note` and optional `index` field.
         """
-        grid = [[" " for _ in range(self.total_pulses)] for _ in range(4)]  # 4 rows for KICK, SNARE, HIHAT, TOM
+        grid = [[" " for _ in range(self.total_pulses)] for _ in range(4)]  # 4 rows: KICK, SNARE, TOM, CYMBAL (§2.1)
         for event in events:
             note = event["note"]
-            idx = event.get("index", 0)  # Assuming we add an 'index' field to track the tick index
+            idx = event.get("index", 0)
             if note == self.KICK:
                 grid[0][idx] = "K"
             elif note == self.SNARE:
                 grid[1][idx] = "S"
-            elif note in [self.HIHAT_CLOSED, self.HIHAT_OPEN]:
-                grid[2][idx] = "H"
             elif note in [self.TOM_LOW, self.TOM_MID, self.TOM_HIGH]:
-                grid[3][idx] = "T"  # Represent tom fills with 'T'
+                grid[2][idx] = "T"
+            elif note == self.CYMBAL:
+                grid[3][idx] = "C"
 
-        print("KICK: " + "".join(grid[0]))
-        print("SNARE: " + "".join(grid[1]))
-        print("HIHAT: " + "".join(grid[2]))
-        print("TOM:  " + "".join(grid[3]))
+        print("KICK:   " + "".join(grid[0]))
+        print("SNARE:  " + "".join(grid[1]))
+        print("TOM:    " + "".join(grid[2]))
+        print("CYMBAL: " + "".join(grid[3]))

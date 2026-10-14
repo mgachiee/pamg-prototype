@@ -111,14 +111,15 @@ This ensures subsequent Pool-1 events derive their offsets from a different, but
 
 ---
 
-## RNG Architecture
+## RNG Architecture & Dual Seeds (§7.1, S2 §3.2.2)
 
-Two `random` module instances are used depending on mode:
+The dissertation specification requires that reseeding drives **both pitch and rhythm seeds independently**. The generator therefore maintains independent RNG instances:
 
 | Attribute | Type | Mode | Purpose |
 |---|---|---|---|
-| `_rng` | `random.Random` | Both | Seeded pseudo-random generator; drives offset computation in deterministic mode. Unseeded (non-deterministic) in improvisation mode but retained for structural parity. |
-| `_system_rng` | `random.SystemRandom` | Improvisation only | OS-entropy source; not seedable, not replayable. Produces unpredictable seeds for free improvisation. Set to `None` in deterministic mode. |
+| `_rng` | `random.Random` | Both | Drives pitch seed offset computation in deterministic mode. |
+| `_rhythm_rng` | `random.Random` | Both | Drives rhythm seed offset computation in deterministic mode. |
+| `_system_rng` | `random.SystemRandom` | Improvisation only | OS-entropy source; produces unpredictable pitch and rhythm seeds. |
 
 ---
 
@@ -138,32 +139,45 @@ generator = SeededPhraseGenerator(base_seed=0)
 
 ---
 
-### `process_chord_change(current_chord_pool, phrase_length) → int`
+### `process_chord_change(current_chord_pool, phrase_length) → SeedState`
 
-Evaluate whether a new seed should be issued and return the active seed.
+Evaluate whether a new seed should be issued and return the active `SeedState`.
 
 | Arg | Type | Description |
 |---|---|---|
 | `current_chord_pool` | `int` | Harmony Agent's current chord pool. `1` = home group; gates seed updates in deterministic mode. |
 | `phrase_length` | `int` | Phrase length in measures. Scales the random offset. Clamped internally to `≥ 1`. |
 
-**Returns:** The integer seed agents should use for the current phrase — either a newly computed value or the unchanged `current_seed`.
-
-**Called by:** The scheduler or a Harmony Agent chord-change callback. Should be called every time the Harmony Agent signals a chord pool transition.
+**Returns:** An atomic `SeedState(base_seed, current_seed, rhythm_seed)`. Can also be unpacked as `pitch_seed, rhythm_seed` or cast to `int`.
 
 ---
 
-## Usage Pattern (Scheduler Integration)
+## Usage Pattern (Clock Broadcast)
 
 ```python
-# core/scheduler.py or harmony_agent.py
+# core/clock.py
+generator = SeededPhraseGenerator(base_seed=base_seed)
 
-generator = SeededPhraseGenerator(base_seed=config.seed)
-
-def on_chord_change(chord_pool: int, phrase_length: int):
-    new_seed = generator.process_chord_change(chord_pool, phrase_length)
-    # Broadcast to all agents so they generate consistent variations
-    agents.broadcast_seed(new_seed)
+seed_state = generator.process_chord_change(
+    harmony_agent.get_chord_pool(), phrase_length
+)
+if seed_state != prev_seed_state:
+    melody_agent.update_params(
+        seed=seed_state.current_seed,
+        rhythm_seed=seed_state.rhythm_seed,
+        seed_state=seed_state,
+    )
+    percussion_agent.update_params(
+        seed=seed_state.current_seed,
+        rhythm_seed=seed_state.rhythm_seed,
+        seed_state=seed_state,
+    )
+    harmony_agent.update_params(
+        seed=seed_state.current_seed,
+        rhythm_seed=seed_state.rhythm_seed,
+        seed_state=seed_state,
+    )
+    orchestrator_agent.update_params(seed=seed_state.current_seed)
 ```
 
 ---
@@ -173,9 +187,9 @@ def on_chord_change(chord_pool: int, phrase_length: int):
 | Module | Role | Interaction with SeededPhraseGenerator |
 |---|---|---|
 | `MultiParameterPresetInterpolator` | Continuous parameter vectors | Provides `phrase_length` from interpolated parameters |
-| `SeededPhraseGenerator` | Seed / motif management | Consumes `phrase_length`; outputs seed |
+| `SeededPhraseGenerator` | Seed / motif management | Consumes `phrase_length`; outputs `SeedState` |
 | `HarmonyAgent` | Chord progressions | Provides `current_chord_pool` on each chord change |
-| All agents | Music generation | Consume the broadcast seed to produce consistent variations |
+| All agents | Music generation | Consume `SeedState` (pitch and rhythm seeds) to produce consistent variations |
 
 ---
 
@@ -183,6 +197,7 @@ def on_chord_change(chord_pool: int, phrase_length: int):
 
 | Import | Role |
 |---|---|
-| `random.Random` | Seedable pseudo-random generator for deterministic offset computation |
+| `random.Random` | Seedable pseudo-random generator for deterministic pitch and rhythm offset computation |
 | `random.SystemRandom` | OS-entropy source for improvisation mode (non-replayable) |
+| `src.models.seed_state.SeedState` | Shared atomic container for base, pitch, and rhythm seeds |
 | `src.core.logger.Logger` | Structured logger; records mode, seed values, and offsets at INFO level |
