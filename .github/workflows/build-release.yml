@@ -1,0 +1,211 @@
+name: Build and Release PAMG Server
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'pamg-*'
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Custom tag name for this release (e.g. v1.0.0-beta)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  init-release:
+    name: Initialize GitHub Release
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+      is_prerelease: ${{ steps.vars.outputs.is_prerelease }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Determine Release Tag
+        id: vars
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            tag="${{ github.ref_name }}"
+            if echo "$tag" | grep -Eq "alpha|beta|rc|preview"; then
+              is_prerelease="true"
+            else
+              is_prerelease="false"
+            fi
+          elif [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            tag="${{ github.event.inputs.release_tag }}"
+            if echo "$tag" | grep -Eq "alpha|beta|rc|preview"; then
+              is_prerelease="true"
+            else
+              is_prerelease="false"
+            fi
+          else
+            tag="nightly"
+            is_prerelease="true"
+          fi
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$is_prerelease" >> $GITHUB_OUTPUT
+
+      - name: Create or Update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: PAMG Server ${{ steps.vars.outputs.tag }}
+          body: |
+            ## PAMG Standalone Music Engine Server (Windows, Linux, macOS)
+            Automated companion sidecar server for Game Engines (Unreal, Unity, Godot) or interactive algorithmic music generation.
+            
+            - **Build Commit**: ${{ github.sha }}
+            - **Assets**:
+              - `pamg-server-windows.zip` (Windows x64 executable + DirectSound/WASAPI + SoundFont)
+              - `pamg-server-windows.tar.gz` (Windows x64 executable + DirectSound/WASAPI + SoundFont)
+              - `pamg-server-linux.tar.gz` (Linux x64 binary + PulseAudio/ALSA + SoundFont)
+              - `pamg-server-macos.tar.gz` (macOS binary + CoreAudio + SoundFont)
+            
+            ### Quick Start
+            1. Extract the archive for your operating system.
+            2. Run `run_server.bat` (Windows) or `./run_server.sh` (Linux/macOS), or launch `pamg-server` as a companion sidecar from your game project directory.
+            3. Connect via TCP to `127.0.0.1:9000` to stream real-time telemetry or affective variables.
+          draft: false
+          prerelease: ${{ steps.vars.outputs.is_prerelease == 'true' }}
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: [init-release]
+    if: always() && !cancelled() && (needs.init-release.result == 'success' || needs.init-release.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+            archive_name: pamg-server-linux.tar.gz
+          - os: macos-latest
+            platform: macos
+            archive_name: pamg-server-macos.tar.gz
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      # --- FluidSynth Dependencies ---
+      - name: Install FluidSynth (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          Write-Host "Downloading FluidSynth Windows binaries (v2.6.1)..."
+          $fsUrl = "https://github.com/FluidSynth/fluidsynth/releases/download/v2.6.1/fluidsynth-v2.6.1-win10-x64-cpp11.zip"
+          $zipPath = "$env:TEMP\fluidsynth.zip"
+          curl.exe -L -f -o $zipPath $fsUrl
+          Expand-Archive -Path $zipPath -DestinationPath "C:\tools\fluidsynth" -Force
+          $binDir = (Get-ChildItem -Path "C:\tools\fluidsynth" -Recurse -Directory -Filter "bin" | Select-Object -First 1).FullName
+          if (-not $binDir) { $binDir = "C:\tools\fluidsynth" }
+          Write-Host "FluidSynth binaries installed to: $binDir"
+          echo "$binDir" >> $env:GITHUB_PATH
+          echo "FLUIDSYNTH_BIN=$binDir" >> $env:GITHUB_ENV
+
+      - name: Install FluidSynth (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfluidsynth-dev fluidsynth libasound2-dev libjack-dev
+
+      - name: Install FluidSynth (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install fluidsynth
+
+      # --- SoundFont Asset ---
+      - name: Download SoundFont Asset (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path src/assets | Out-Null
+          $sf2Target = "src/assets/FluidR3_GM_GS.sf2"
+          if (-not (Test-Path $sf2Target)) {
+            Write-Host "Downloading FluidR3_GM_GS.sf2 SoundFont (~144 MB)..."
+            curl.exe -L -f -o $sf2Target "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+          }
+
+      - name: Download SoundFont Asset (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p src/assets
+          if [ ! -f "src/assets/FluidR3_GM_GS.sf2" ]; then
+            echo "Downloading FluidR3_GM_GS.sf2 SoundFont (~144 MB)..."
+            curl -L -f -o src/assets/FluidR3_GM_GS.sf2 "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+          fi
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pytest
+
+      - name: Run Unit Tests
+        run: |
+          pytest tests/
+
+      - name: Build Executable with PyInstaller
+        run: |
+          pyinstaller pamg_server.spec --clean --noconfirm
+
+      # --- Helper Launch Scripts & Packaging ---
+      - name: Package Release Archives (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          @"
+          @echo off
+          title PAMG Music Engine Server
+          echo Starting PAMG Music Engine Server...
+          pamg-server.exe --tcp --tcp-port 9000 %*
+          echo.
+          echo Server terminated.
+          pause
+          "@ | Out-File -FilePath "dist/pamg-server/run_server.bat" -Encoding ascii
+          Compress-Archive -Path "dist/pamg-server/*" -DestinationPath "pamg-server-windows.zip" -Force
+          tar.exe -czf "pamg-server-windows.tar.gz" -C dist/pamg-server .
+
+      - name: Package Release Archive (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cat << 'EOF' > dist/pamg-server/run_server.sh
+          #!/bin/bash
+          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$DIR"
+          echo "Starting PAMG Music Engine Server..."
+          ./pamg-server --tcp --tcp-port 9000 "$@"
+          EOF
+          chmod +x dist/pamg-server/run_server.sh
+          chmod +x dist/pamg-server/pamg-server || true
+          tar -czf "${{ matrix.archive_name }}" -C dist/pamg-server .
+
+      # --- Direct Upload to Release (Same Repo) ---
+      - name: Upload Assets Directly to GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ needs.init-release.outputs.tag }}
+          files: |
+            pamg-server-*.zip
+            pamg-server-*.tar.gz

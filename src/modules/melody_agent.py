@@ -3,7 +3,7 @@
 import logging
 import random
 from enum import Enum
-from typing import List, Optional, Tuple, Union
+from typing import Iterable, List, Optional, Tuple, Union
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,7 @@ class MelodyAgent:
         self.movement = self._normalize_movement(movement)
         self.loop_size = loop_size
         self.grain = grain
+        self.total_pulses = self.loop_size * self.grain
         if max_step is None:
             self.max_step = 4
         else:
@@ -92,6 +93,7 @@ class MelodyAgent:
             self.ratchet_probability = float(ratchet_probability)
 
         self.drunk_mode = self._normalize_drunk_mode(drunk_mode)
+        self.non_repeat = True  # Baseline GUI Non-Repeat toggle (§3.3)
         self._contour_direction = 1
         self._contour_steps_remaining = 0
         self._contour_min_steps = 3
@@ -111,20 +113,26 @@ class MelodyAgent:
 
         self.velocity_range = self._normalize_velocity_range(velocity_range)
         self._velocity_step = max(1, int(velocity_step))
-        self._velocity = float(sum(self.velocity_range) / 2)
+        self._base_velocity = float(sum(self.velocity_range) / 2)
+        self._velocity = self._base_velocity
         self._accent_boost_range = (6, 14)
         self._syncopation_boost_range = (8, 18)
 
         self.midi_channel = 0  # Default MIDI channel for melody
 
-        # Local random generator for reproducibility
+        # Local random generators for reproducibility: separate pitch and rhythm RNGs (§7.1, S2 §3.2.2)
         if seed is None:
-            self._rng = random.Random()
+            self._pitch_rng = random.Random()
+            self._rhythm_rng = random.Random()
         else:
-            self._rng = random.Random(seed)
+            self._pitch_rng = random.Random(seed)
+            self._rhythm_rng = random.Random(seed)
+        self._rng = self._pitch_rng  # Backwards compatibility alias
 
         self._onset_indices = set()
+        self._moved_list = set()
         self._accent_beats = set()
+        self._contour_pitches = {}
         self.on_loop_start(0)
 
     # ------------------------------------------------------------------
@@ -174,8 +182,8 @@ class MelodyAgent:
         if mode is None:
             return "drunk"
         normalized = str(mode).strip().lower().replace("-", "_")
-        if normalized == "drunk_contour":
-            return "drunk_contour"
+        if normalized in ("dcontour", "drunk_contour"):
+            return "dcontour"
         return "drunk"
 
     def _normalize_movement(
@@ -200,50 +208,46 @@ class MelodyAgent:
         is_accent: bool,
     ) -> int:
         step = self._rng.randint(-self._velocity_step, self._velocity_step)
-        if is_syncopated:
-            step += self._rng.randint(0, self._velocity_step)
-        if is_accent:
-            step += self._rng.randint(0, self._velocity_step)
 
-        self._velocity = self._clamp_velocity(self._velocity + step)
+        # Mean-reversion pull towards target base velocity (§2.2, §3.4)
+        pull = (self._base_velocity - self._velocity) * 0.35
+        self._velocity = self._clamp_velocity(self._velocity + pull + step)
         velocity = int(round(self._velocity))
 
+        # Scale transient boost proportionally to current dynamic level
+        dynamic_scale = max(0.3, min(1.2, self._base_velocity / 80.0))
         if is_syncopated:
-            boost = self._rng.randint(*self._syncopation_boost_range)
-            velocity += boost
-        if is_accent:
-            boost = self._rng.randint(*self._accent_boost_range)
-            velocity += boost
+            raw_boost = self._rng.randint(*self._syncopation_boost_range)
+            velocity += int(round(raw_boost * dynamic_scale))
+        elif is_accent:
+            raw_boost = self._rng.randint(*self._accent_boost_range)
+            velocity += int(round(raw_boost * dynamic_scale))
 
         return self._clamp_velocity(velocity)
 
-    def _next_pitch_step(self) -> int:
-        if self.drunk_mode == "drunk_contour":
-            return self._next_contour_step()
-        return self._rng.randint(-self.max_step, self.max_step)
-
-    def _next_contour_step(self) -> int:
+    def _next_pitch_step(self, index: Optional[int] = None) -> int:
+        if self.drunk_mode == "dcontour":
+            return self._next_contour_step(index)
         low, high = self.pitch_range
-        if self._contour_steps_remaining <= 0:
-            self._contour_direction = self._rng.choice([-1, 1])
-            self._contour_steps_remaining = self._rng.randint(
-                self._contour_min_steps,
-                self._contour_max_steps,
-            )
-
-        if self.current_pitch >= high - 1:
-            self._contour_direction = -1
-        elif self.current_pitch <= low + 1:
-            self._contour_direction = 1
-
-        self._contour_steps_remaining -= 1
-
-        step_size = self._rng.randint(1, max(1, self.max_step))
-        step = step_size * self._contour_direction
-        if self._rng.random() < self._contour_turn_probability:
-            step = -max(1, step_size // 2) * self._contour_direction
-
+        step = self._pitch_rng.randint(-self.max_step, self.max_step)
+        if low <= self.current_pitch <= high:
+            next_p = self.current_pitch + step
+            if next_p > high:
+                next_p = high - (next_p - high)
+            elif next_p < low:
+                next_p = low + (low - next_p)
+            next_p = max(low, min(high, next_p))
+            return next_p - self.current_pitch
         return step
+
+    def _next_contour_step(self, index: Optional[int] = None) -> int:
+        """
+        Contour step generator (§2.3.1, §3.3).
+        Interpolates pitch between Moved List onsets.
+        """
+        if index is not None and index in self._contour_pitches:
+            return self._contour_pitches[index] - self.current_pitch
+        return self._pitch_rng.randint(-self.max_step, self.max_step)
 
     # ------------------------------------------------------------------
     # Pattern generation
@@ -264,29 +268,77 @@ class MelodyAgent:
     def _build_onset_pattern(self) -> None:
         base_onsets = [beat * self.grain for beat in range(self.loop_size)]
         onset_indices = set(base_onsets)
+        moved_list = set()
 
         accent_beats = {0}
         syncopation_choices = self._preferred_syncopation_subdivisions()
 
         for beat in range(self.loop_size):
-            if beat != 0 and self._rng.random() < self.accent_probability:
+            if beat != 0 and self._rhythm_rng.random() < self.accent_probability:
                 accent_beats.add(beat)
 
-            if self._rng.random() < self.sub_probability:
+            if self._rhythm_rng.random() < self.sub_probability:
                 onset_indices.discard(beat * self.grain)
 
-            if self._rng.random() < self.add_probability:
+            if self._rhythm_rng.random() < self.add_probability:
                 if syncopation_choices:
-                    subdivision = self._rng.choice(syncopation_choices)
-                    onset_indices.add(beat * self.grain + subdivision)
+                    subdivision = self._rhythm_rng.choice(syncopation_choices)
+                    idx = beat * self.grain + subdivision
+                    onset_indices.add(idx)
+                    moved_list.add(idx)
 
-            if self._rng.random() < self.syncopation_probability:
+            if self._rhythm_rng.random() < self.syncopation_probability:
                 if syncopation_choices:
-                    subdivision = self._rng.choice(syncopation_choices)
-                    onset_indices.add(beat * self.grain + subdivision)
+                    subdivision = self._rhythm_rng.choice(syncopation_choices)
+                    idx = beat * self.grain + subdivision
+                    onset_indices.add(idx)
+                    moved_list.add(idx)
 
         self._onset_indices = onset_indices
+        self._moved_list = moved_list
         self._accent_beats = accent_beats
+        self._build_contour_pitches()
+
+    def _build_contour_pitches(self) -> None:
+        """
+        Build pitch contour for dcontour mode (§2.3.1, §3.3).
+        Generates pitch values at Moved List nodes via drunk walk,
+        and explicitly interpolates between them for intermediate onsets.
+        """
+        self._contour_pitches = {}
+        if not self._onset_indices:
+            return
+
+        sorted_onsets = sorted(self._onset_indices)
+        # Anchor nodes: loop boundaries plus all Moved List onsets
+        nodes = sorted(list(self._moved_list | {sorted_onsets[0], sorted_onsets[-1]}))
+
+        node_pitches = {}
+        low, high = self.pitch_range
+        current = max(low, min(high, self.current_pitch))
+        for node in nodes:
+            step = self._pitch_rng.randint(-self.max_step, self.max_step)
+            current += step
+            if current > high:
+                current = high - (current - high)
+            elif current < low:
+                current = low + (low - current)
+            current = max(low, min(high, current))
+            node_pitches[node] = current
+
+        # Interpolate between nodes for all onsets
+        for idx in sorted_onsets:
+            if idx in node_pitches:
+                self._contour_pitches[idx] = node_pitches[idx]
+            else:
+                left = max([n for n in nodes if n <= idx], default=nodes[0])
+                right = min([n for n in nodes if n >= idx], default=nodes[-1])
+                if right == left:
+                    self._contour_pitches[idx] = node_pitches[left]
+                else:
+                    t = (idx - left) / (right - left)
+                    p = node_pitches[left] + t * (node_pitches[right] - node_pitches[left])
+                    self._contour_pitches[idx] = max(low, min(high, int(round(p))))
 
     # ------------------------------------------------------------------
     # Loop/phrase lifecycle
@@ -320,22 +372,21 @@ class MelodyAgent:
         )
         self._shape_steps_remaining -= 1
 
-    def get_lookahead(self, current_tick: int, lookahead_ticks: int) -> List[int]:
+    def get_lookahead(self, current_index: int, lookahead_steps: int) -> List[bool]:
         """
         Query upcoming melodic onsets within a future window.
 
         Args:
-            current_tick (int): Starting index for the query.
-            lookahead_ticks (int): Number of ticks to look ahead.
+            current_index (int): Starting index for the query.
+            lookahead_steps (int): Number of steps to look ahead.
 
         Returns:
-            List[int]: Relative indices (within the window) of planned onsets.
+            List[bool]: Boolean list indicating whether each step has an onset.
         """
         onsets = []
-        for i in range(lookahead_ticks):
-            idx = (current_tick + i) % self.total_pulses
-            if idx in self._onset_indices:
-                onsets.append(i)
+        for i in range(lookahead_steps):
+            idx = (current_index + i) % self.total_pulses
+            onsets.append(idx in self._onset_indices)
         return onsets
 
     def get_accent_list(self) -> List[int]:
@@ -350,15 +401,31 @@ class MelodyAgent:
         self,
         pulse_duration: float,
         subdivision: int,
+        onset_index: Optional[int] = None,
     ) -> float:
+        """
+        Compute note duration based on inter-onset distance classification (§3.2).
+        STACCATO if gap to next onset <= threshold else LEGATO.
+        """
         base = pulse_duration * (
             self.grain if subdivision == 0 else max(1, self.grain // 2)
         )
-        roll = self._rng.random()
-        if roll < self.staccato_probability:
-            duration = base * 0.5
-        elif roll > 1.0 - self.legato_probability:
-            duration = base * 1.1
+        if onset_index is not None and self._onset_indices:
+            sorted_onsets = sorted(self._onset_indices)
+            try:
+                curr_pos = sorted_onsets.index(onset_index)
+                if curr_pos < len(sorted_onsets) - 1:
+                    gap = sorted_onsets[curr_pos + 1] - onset_index
+                else:
+                    gap = (self.loop_size * self.grain) - onset_index + sorted_onsets[0]
+            except ValueError:
+                gap = self.grain
+
+            threshold = max(1, self.grain // 2)
+            if gap <= threshold:
+                duration = base * 0.5   # STACCATO
+            else:
+                duration = base * 1.05  # LEGATO
         else:
             duration = base * 0.85
 
@@ -373,6 +440,7 @@ class MelodyAgent:
         index: int,
         current_chord: Optional[List[int]],
         pulse_duration: Optional[float] = None,
+        current_chord_pcs: Optional[Iterable[int]] = None,
     ) -> List[dict]:
         """Process a single clock tick and emit melody events.
 
@@ -380,6 +448,7 @@ class MelodyAgent:
             index (int): Current tick index.
             current_chord (Optional[List[int]]): Harmony chord tones.
             pulse_duration (Optional[float]): Pulse duration in seconds.
+            current_chord_pcs (Optional[Iterable[int]]): Active chord pitch classes (0..11).
 
         Returns:
             List[dict]: Raw melody event dictionaries.
@@ -407,28 +476,31 @@ class MelodyAgent:
         )
         is_ratchet = self._rng.random() < self.ratchet_probability
 
-        # =============== Melody Pitches Generation ('Drunk Walk') ===============
-        # Randomly step up or down from the LAST played note. This creates
-        # a sense of coherence, but the random stepping allows for
-        # surprising twists and turns.
-        step = self._next_pitch_step()
+        # =============== Melody Pitches Generation ('Drunk Walk' / 'dcontour') ===============
+        step = self._next_pitch_step(index)
         raw_pitch = self.current_pitch + step + self._phrase_transpose
 
-        # Keep it within the defined pitch range to avoid out-of-bounds
-        # MIDI notes.
-        raw_pitch = max(
-            self.pitch_range[0],
-            min(self.pitch_range[1], raw_pitch),
-        )
+        # =============== Harmony Filter (§2.3.3) ===============
+        # Note: Local pitch range clamping is intentionally removed before
+        # the Harmony Filter. Pitch in harmony feeds OrchestratorAgent directly,
+        # which is solely responsible for instrument range clamping (§6.1, §5.3).
+        chord_pcs = set()
+        if current_chord_pcs:
+            chord_pcs = set(pc % 12 for pc in current_chord_pcs)
+        elif current_chord:
+            chord_pcs = set(note % 12 for note in current_chord)
 
-        # =============== Harmony Filter ===============
-        # The raw pitch might sound terrible. We must "snap" it to the
-        # nearest valid pitch provided by the Harmony Agent's current chord.
-        if current_chord:
-            filtered_pitch = min(
-                current_chord,
-                key=lambda chord_note: abs(chord_note - raw_pitch),
-            )
+        if chord_pcs:
+            octave_center = (raw_pitch // 12) * 12
+            candidates = []
+            for oct_offset in (-12, 0, 12):
+                for pc in chord_pcs:
+                    candidates.append(octave_center + oct_offset + pc)
+            sorted_candidates = sorted(candidates, key=lambda c: abs(c - raw_pitch))
+            if getattr(self, "non_repeat", True) and len(sorted_candidates) > 1 and sorted_candidates[0] == self.current_pitch:
+                filtered_pitch = sorted_candidates[1]
+            else:
+                filtered_pitch = sorted_candidates[0]
         else:
             filtered_pitch = raw_pitch
 
@@ -439,13 +511,14 @@ class MelodyAgent:
             self.pitch_range,
         )
         
-        # Save this filtered pitch as the starting point for the next step.
-        self.current_pitch = filtered_pitch
+        # Save this filtered pitch bounded by pitch_range as starting point for next step.
+        low, high = self.pitch_range
+        self.current_pitch = max(low, min(high, filtered_pitch))
 
         # =============== MIDI Event Construction ===============
         duration = None
         if pulse_duration is not None:
-            duration = self._select_duration(pulse_duration, subdivision)
+            duration = self._select_duration(pulse_duration, subdivision, onset_index=index)
         events.append(
             self._build_midi(
                 note=filtered_pitch,
@@ -489,9 +562,62 @@ class MelodyAgent:
         changed = False
         pattern_changed = False
 
-        if "seed" in kwargs:
-            self._rng.seed(int(kwargs["seed"]))
+        if "seed_state" in kwargs and kwargs["seed_state"] is not None:
+            ss = kwargs["seed_state"]
+            self._pitch_rng.seed(int(ss.current_seed))
+            self._rhythm_rng.seed(int(ss.rhythm_seed))
             changed = True
+        else:
+            if "seed" in kwargs and kwargs["seed"] is not None:
+                self._pitch_rng.seed(int(kwargs["seed"]))
+                changed = True
+            if "rhythm_seed" in kwargs and kwargs["rhythm_seed"] is not None:
+                self._rhythm_rng.seed(int(kwargs["rhythm_seed"]))
+                changed = True
+
+        if "ma_step" in kwargs:
+            new_max = int(kwargs["ma_step"])
+            if new_max != self.max_step:
+                self.max_step = max(1, new_max)
+                changed = True
+
+        if "ma_range_low" in kwargs and "ma_range_high" in kwargs:
+            new_pr = (int(kwargs["ma_range_low"]), int(kwargs["ma_range_high"]))
+            new_pr = self._normalize_pitch_range(new_pr)
+            if new_pr != self.pitch_range:
+                self.pitch_range = new_pr
+                changed = True
+
+        if "ma_velocity" in kwargs:
+            new_vel = float(kwargs["ma_velocity"])
+            if new_vel != self._base_velocity:
+                self._base_velocity = new_vel
+                self.velocity_range = (
+                    max(15, int(self._base_velocity - 14)),
+                    min(127, int(self._base_velocity + 16)),
+                )
+                self._velocity = self._clamp_velocity(new_vel)
+                changed = True
+
+        if "ma_trans" in kwargs:
+            new_trans = int(kwargs["ma_trans"])
+            if new_trans != self._phrase_transpose:
+                self._phrase_transpose = new_trans
+                changed = True
+
+        if "ma_plus_minus_notes" in kwargs:
+            delta = float(kwargs["ma_plus_minus_notes"])
+            self.add_probability = max(0.0, min(1.0, 0.15 + delta * 0.3)) if delta > 0 else 0.15
+            self.sub_probability = max(0.0, min(1.0, 0.10 - delta * 0.3)) if delta < 0 else 0.10
+            changed = True
+            pattern_changed = True
+
+        if "ma_mv_even" in kwargs or "ma_mv_odd" in kwargs:
+            even_w = float(kwargs.get("ma_mv_even", 0.5))
+            odd_w = float(kwargs.get("ma_mv_odd", 0.5))
+            self.movement = MelodyAgent.movement_type.even if even_w >= odd_w else MelodyAgent.movement_type.odd
+            changed = True
+            pattern_changed = True
 
         if "max_step" in kwargs:
             new_max = int(kwargs["max_step"])
@@ -593,6 +719,26 @@ class MelodyAgent:
                 self.movement = new_val
                 changed = True
                 pattern_changed = True
+
+        if "loop_size" in kwargs:
+            new_loop = max(1, int(kwargs["loop_size"]))
+            if new_loop != self.loop_size:
+                self.loop_size = new_loop
+                self.total_pulses = self.loop_size * self.grain
+                changed = True
+                pattern_changed = True
+
+        if "grain" in kwargs:
+            new_grain = max(1, int(kwargs["grain"]))
+            if new_grain != self.grain:
+                self.grain = new_grain
+                self.total_pulses = self.loop_size * self.grain
+                changed = True
+                pattern_changed = True
+
+        if "meter" in kwargs and hasattr(self, "meter"):
+            self.meter = kwargs["meter"]
+            changed = True
 
         if pattern_changed:
             self._build_onset_pattern()

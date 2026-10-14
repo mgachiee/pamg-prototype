@@ -1,8 +1,18 @@
 # Python venv
-venv/
+.venv/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 */*.py[cod]
 
+# Assets
+*.sf2
+
+logs/
+*.log
 dataset/
+
+# Build & packaging artifacts
+build/
+dist/
+*.egg-info/

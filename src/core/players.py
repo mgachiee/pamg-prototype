@@ -5,6 +5,11 @@ import mido
 from typing import Any, Optional
 
 
+from src.core.logger import Logger
+
+logger = Logger()
+
+
 # ---------------------------------------------------------------------------
 # Control messages
 # ---------------------------------------------------------------------------
@@ -34,8 +39,8 @@ async def send_cc(
             channel=int(channel),
         )
         await queue.put(msg)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"send_cc failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +89,7 @@ async def play_note(
     """
     # Note-on immediately, note-off after the requested duration.
     msg_on = mido.Message('note_on', channel=channel, note=note, velocity=velocity)
-    msg_off = mido.Message('note_off', channel=channel, note=note, velocity=velocity)
+    msg_off = mido.Message('note_off', channel=channel, note=note, velocity=0)
     await _send(port, msg_on)
     try:
         await asyncio.sleep(duration)
@@ -102,25 +107,35 @@ async def play_ratchet(
     total_duration,
     subdivisions=3,
     channel=0,
+    crescendo=False,
 ) -> None:
     """
-    Play a ratcheted note burst.
+    Play a ratcheted note burst or orchestral drum roll with guaranteed note-off safety.
 
     Args:
         port: MIDI output port or queue.
         note: MIDI note number (0-127).
-        velocity: MIDI velocity (1-127).
+        velocity: MIDI target velocity (1-127).
         total_duration: Total ratchet duration in seconds.
         subdivisions: Number of sub-hits within the duration.
         channel: MIDI channel (0-15).
+        crescendo: If True, swell velocity from 35% up to 100% across subdivisions.
     """
     # Split the duration into even subdivisions for the ratchet burst.
     sub = total_duration / max(1, subdivisions)
-    for _ in range(subdivisions):
-        await _send(port, mido.Message('note_on', channel=channel, note=note, velocity=velocity))
-        await asyncio.sleep(sub * 0.4)
-        await _send(port, mido.Message('note_off', channel=channel, note=note, velocity=velocity))
-        await asyncio.sleep(sub * 0.6)
+    for i in range(subdivisions):
+        if crescendo and subdivisions > 1:
+            factor = 0.30 + 0.70 * ((i / (subdivisions - 1)) ** 1.2)
+            stroke_vel = max(1, min(127, int(round(velocity * factor))))
+        else:
+            stroke_vel = velocity
+
+        await _send(port, mido.Message('note_on', channel=channel, note=note, velocity=stroke_vel))
+        try:
+            await asyncio.sleep(sub * 0.85 if crescendo else sub * 0.4)
+        finally:
+            await _send(port, mido.Message('note_off', channel=channel, note=note, velocity=0))
+        await asyncio.sleep(sub * 0.15 if crescendo else sub * 0.6)
 
 # ------------------------------------------------------------------
 # Chord playback
@@ -151,7 +166,7 @@ async def play_chord(
     finally:
         # Always release notes, even if the sleep is interrupted.
         for note in chord_notes:
-            await _send(port, mido.Message('note_off', channel=channel, note=note, velocity=velocity))
+            await _send(port, mido.Message('note_off', channel=channel, note=note, velocity=0))
 
 # ------------------------------------------------------------------
 # Arpeggio playback
@@ -165,7 +180,7 @@ async def play_arpeggio(
     channel=1,
 ) -> None:
     """
-    Play an arpeggio by sequencing note on/off events.
+    Play an arpeggio by sequencing note on/off events with note-off safety.
 
     Args:
         port: MIDI output port or queue.
@@ -178,5 +193,7 @@ async def play_arpeggio(
     step = total_duration / max(1, len(notes))
     for n in notes:
         await _send(port, mido.Message('note_on', channel=channel, note=n, velocity=velocity))
-        await asyncio.sleep(step)
-        await _send(port, mido.Message('note_off', channel=channel, note=n, velocity=0))
+        try:
+            await asyncio.sleep(step)
+        finally:
+            await _send(port, mido.Message('note_off', channel=channel, note=n, velocity=0))
