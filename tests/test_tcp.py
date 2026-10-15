@@ -125,6 +125,31 @@ def test_tcp_telemetry_valence_arousal():
     asyncio.run(_run())
 
 
+def test_tcp_telemetry_preserves_raw_va_and_key_center():
+    from src.core.packet_handler import PacketHandler
+
+    state = GameState()
+    handler = PacketHandler(state)
+
+    response = handler.handle_packet(
+        {
+            "action": "telemetry",
+            "valence": -0.5,
+            "arousal": 0.75,
+            "key": "f#",
+        }
+    )
+
+    assert state.raw_valence == -0.5
+    assert state.raw_arousal == 0.75
+    assert state.x == 0.25
+    assert state.y == 0.875
+    assert state.key_center == "F#"
+    assert response["key_center"] == "F#"
+    assert response["raw_valence"] == -0.5
+    assert response["raw_arousal"] == 0.75
+
+
 def test_tcp_telemetry_time_signatures():
     async def _run():
         state = GameState()

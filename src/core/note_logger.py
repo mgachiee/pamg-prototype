@@ -6,7 +6,10 @@ to a dedicated .log file for inspection, verification, and analysis.
 """
 
 import os
+import re
+import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 # Scientific pitch names
@@ -66,24 +69,55 @@ class NoteLogger:
     """Thread-safe and async-safe playback event logger."""
 
     def __init__(self, log_path: str = "logs/pamg_playback.log"):
-        self.log_path = log_path
+        self.log_path = self._resolve_log_path(log_path)
         os.makedirs(os.path.dirname(self.log_path) if os.path.dirname(self.log_path) else ".", exist_ok=True)
         self._file = None
-        self._open_log()
+        self._session_started = False
 
-    def _open_log(self) -> None:
+    @staticmethod
+    def _resolve_log_path(log_path: str) -> str:
+        """Resolve relative packaged-app logs beside the executable."""
+        path = Path(log_path)
+        if path.is_absolute() or not getattr(sys, "frozen", False):
+            return str(path)
+        return str(Path(sys.executable).resolve().parent / path)
+
+    def start_session(
+        self,
+        key_center: str,
+        time_signature: str,
+        tempo: float,
+        raw_valence: Optional[float],
+        raw_arousal: Optional[float],
+        normalized_valence: float,
+        normalized_arousal: float,
+        preset_label: str,
+    ) -> None:
+        """Start a playback session and write its initial execution trace."""
+        self.close()
         try:
             self._file = open(self.log_path, "a", encoding="utf-8", buffering=1)
             self._file.write(
-                f"\n{'='*95}\n"
-                f"PAMG PLAYBACK LOG SESSION STARTED — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"{'='*95}\n"
+                f"\n{'='*127}\n"
+                f"PAMG REAL-TIME AUDIO ENGINE - EXECUTION TRACE\n"
+                f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Directory: {os.path.abspath(self.log_path)}\n"
+                f"Key Center: {key_center} | Time Signature: {time_signature} | Initial Tempo: {tempo:.1f} BPM\n"
+                f"Received VA: V={self._format_value(raw_valence)} | A={self._format_value(raw_arousal)}\n"
+                f"Normalized VA: V={normalized_valence:.3f} | A={normalized_arousal:.3f}\n"
+                f"Preset: {preset_label}\n"
+                f"{'='*127}\n"
                 f"{'Timestamp':<12} | {'Pos (M:B:S:P)':<16} | {'Agent':<11} | {'Instrument (Ch)':<24} | {'Note':<10} | {'Vel':<4} | {'Dur(s)':<7} | {'Artic':<8}\n"
                 f"{'-'*95}\n"
             )
             self._file.flush()
+            self._session_started = True
         except Exception as e:
             print(f"[NoteLogger Warning] Could not open log file {self.log_path}: {e}")
+
+    @staticmethod
+    def _format_value(value: Optional[float]) -> str:
+        return "N/A" if value is None else f"{value:.3f}"
 
     def log_note(
         self,
@@ -109,19 +143,14 @@ class NoteLogger:
         if channel == 9:
             note_str = f"{note} ({DRUM_NAMES.get(note, 'Perc')[:6]})"
             inst_str = instrument_label or CHANNEL_LABELS.get(9, "Drums (Ch 9)")
+        else:
+            note_str = f"{note} ({midi_to_pitch_name(note)})"
+            inst_str = instrument_label or CHANNEL_LABELS.get(channel, f"Ch {channel}")
 
-            line = (
-                f"{now_str:<12} | {pos_str:<16} | {agent:<11} | {inst_str:<24} | "
-                f"{note_str:<10} | {velocity:<4} | {duration:<7.3f} | {articulation:<8}\n"
-            )
-        # else:
-        #     note_str = f"{note} ({midi_to_pitch_name(note)})"
-        #     inst_str = instrument_label or CHANNEL_LABELS.get(channel, f"Ch {channel}")
-
-        # line = (
-        #     f"{now_str:<12} | {pos_str:<16} | {agent:<11} | {inst_str:<24} | "
-        #     f"{note_str:<10} | {velocity:<4} | {duration:<7.3f} | {articulation:<8}\n"
-        # )
+        line = (
+            f"{now_str:<12} | {pos_str:<16} | {agent:<11} | {inst_str:<24} | "
+            f"{note_str:<10} | {velocity:<4} | {duration:<7.3f} | {articulation:<8}\n"
+        )
         try:
             self._file.write(line)
             self._file.flush()
@@ -132,12 +161,13 @@ class NoteLogger:
         """Close the log file cleanly."""
         if self._file:
             try:
-                self._file.write(f"{'-'*95}\nPAMG PLAYBACK SESSION ENDED — {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                self._file.write(f"{'-'*95}\nPAMG PLAYBACK SESSION ENDED - {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
                 self._file.flush()
                 self._file.close()
             except Exception:
                 pass
             self._file = None
+        self._session_started = False
 
 
 # Global singleton instance

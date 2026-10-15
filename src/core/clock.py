@@ -6,6 +6,7 @@ and dispatches MIDI events for all PAMG agents.
 """
 
 import asyncio
+import math
 import mido
 from typing import Callable, Optional, Tuple
 
@@ -53,6 +54,20 @@ from src.models.game_state import GameState
 from src.utils.audio import use_highres_timer
 
 logger = Logger()
+
+
+def _preset_label(x: float, y: float) -> str:
+    """Return the corner preset name for exact XY positions."""
+    corners = {
+        (0.0, 0.0): "Preset A",
+        (1.0, 0.0): "Preset B",
+        (0.0, 1.0): "Preset C",
+        (1.0, 1.0): "Preset D",
+    }
+    for (corner_x, corner_y), label in corners.items():
+        if math.isclose(x, corner_x) and math.isclose(y, corner_y):
+            return label
+    return "Interpolated"
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +284,19 @@ async def run_clock(
         else:
             init_x, init_y = map_gamevars_to_xy(game_state.health, game_state.enemies)
         interpolator.snap_to(init_x, init_y)
+    else:
+        init_x, init_y = 0.0, 0.0
+
+    note_logger.start_session(
+        key_center=game_state.key_center if game_state is not None else "D",
+        time_signature=game_state.time_signature if game_state is not None else "4/4",
+        tempo=tempo,
+        raw_valence=game_state.raw_valence if game_state is not None else None,
+        raw_arousal=game_state.raw_arousal if game_state is not None else None,
+        normalized_valence=init_x,
+        normalized_arousal=init_y,
+        preset_label=_preset_label(init_x, init_y),
+    )
 
     # ------------------------------------------------------------------
     # MIDI port initialization

@@ -21,7 +21,7 @@ class NativeFluidSynthPort:
             from src.utils.audio import get_default_audio_driver
             audio_driver = get_default_audio_driver()
             if audio_driver == "unknown":
-                audio_driver = "dsound"
+                audio_driver = "wasapi"
 
         from src.utils.audio import get_fluidsynth_binary
         fs_bin = get_fluidsynth_binary()
@@ -318,4 +318,4 @@ def list_midi_ports():
     try:
         return mido.get_output_names()
     except Exception:
-        return []
+        return []

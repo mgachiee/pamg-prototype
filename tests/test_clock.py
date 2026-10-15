@@ -2,8 +2,16 @@ import asyncio
 import pytest
 from unittest.mock import patch
 
-from src.core.clock import run_clock
+from src.core.clock import _preset_label, run_clock
 from src.core.routing import RoutingType
+
+
+def test_preset_label_for_corners_and_blends():
+    assert _preset_label(0.0, 0.0) == "Preset A"
+    assert _preset_label(1.0, 0.0) == "Preset B"
+    assert _preset_label(0.0, 1.0) == "Preset C"
+    assert _preset_label(1.0, 1.0) == "Preset D"
+    assert _preset_label(0.5, 0.5) == "Interpolated"
 
 
 def test_clock_validation_non_positive_tempo():

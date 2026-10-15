@@ -75,8 +75,12 @@ class PacketHandler:
         valence = packet.get("valence")
         arousal = packet.get("arousal")
         if valence is not None or arousal is not None:
-            default_v = self.state.x if self.state.x is not None else 0.5
-            default_a = self.state.y if self.state.y is not None else 0.5
+            if valence is not None:
+                self.state.raw_valence = float(valence)
+            if arousal is not None:
+                self.state.raw_arousal = float(arousal)
+            default_v = self.state.raw_valence if self.state.raw_valence is not None else 0.5
+            default_a = self.state.raw_arousal if self.state.raw_arousal is not None else 0.5
             v = valence if valence is not None else default_v
             a = arousal if arousal is not None else default_a
             self.state.set_valence_arousal(v, a)
@@ -92,6 +96,12 @@ class PacketHandler:
         if isinstance(macro_state, dict):
             music_cfg = macro_state.get("music_config")
             if isinstance(music_cfg, dict):
+                key_center = music_cfg.get("key_center") or music_cfg.get("key")
+                if key_center is not None:
+                    try:
+                        self.state.set_key_center(str(key_center))
+                    except ValueError as err:
+                        return {"status": "error", "message": str(err)}
                 if "time_signature" in music_cfg:
                     try:
                         self.state.set_time_signature(str(music_cfg["time_signature"]))
@@ -113,6 +123,13 @@ class PacketHandler:
             new_tempo = float(packet["tempo"])
             if new_tempo > 0:
                 self.state.tempo = new_tempo
+
+        key_center = packet.get("key_center") or packet.get("key")
+        if key_center is not None:
+            try:
+                self.state.set_key_center(str(key_center))
+            except ValueError as err:
+                return {"status": "error", "message": str(err)}
 
         if "seed" in packet and packet["seed"] is not None:
             self.state.base_seed = int(packet["seed"])
@@ -152,6 +169,9 @@ class PacketHandler:
             "x": self.state.x,
             "y": self.state.y,
             "tempo": self.state.tempo,
+            "key_center": self.state.key_center,
+            "raw_valence": self.state.raw_valence,
+            "raw_arousal": self.state.raw_arousal,
             "seed": self.state.base_seed,
         }
 
@@ -196,6 +216,9 @@ class PacketHandler:
             "current_step": self.state.current_step,
             "bpm": self.state.tempo,
             "time_signature": self.state.time_signature,
+            "key_center": self.state.key_center,
+            "raw_valence": self.state.raw_valence,
+            "raw_arousal": self.state.raw_arousal,
             "x": self.state.x,
             "y": self.state.y,
         }
@@ -216,9 +239,20 @@ class PacketHandler:
     def _handle_flat_telemetry(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback handler for flat JSON packets without an action key."""
         if "valence" in packet or "arousal" in packet:
-            v = packet.get("valence", self.state.x or 0.5)
-            a = packet.get("arousal", self.state.y or 0.5)
+            if "valence" in packet:
+                self.state.raw_valence = float(packet["valence"])
+            if "arousal" in packet:
+                self.state.raw_arousal = float(packet["arousal"])
+            v = packet.get("valence", self.state.raw_valence if self.state.raw_valence is not None else 0.5)
+            a = packet.get("arousal", self.state.raw_arousal if self.state.raw_arousal is not None else 0.5)
             self.state.set_valence_arousal(v, a)
+
+        key_center = packet.get("key_center") or packet.get("key")
+        if key_center is not None:
+            try:
+                self.state.set_key_center(str(key_center))
+            except ValueError as err:
+                return {"status": "error", "message": str(err)}
 
         if "x" in packet and packet["x"] is not None:
             self.state.x = max(0.0, min(1.0, float(packet["x"])))
@@ -270,5 +304,8 @@ class PacketHandler:
             "x": self.state.x,
             "y": self.state.y,
             "tempo": self.state.tempo,
+            "key_center": self.state.key_center,
+            "raw_valence": self.state.raw_valence,
+            "raw_arousal": self.state.raw_arousal,
             "seed": self.state.base_seed,
         }

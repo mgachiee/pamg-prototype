@@ -3,6 +3,7 @@ GameState model for external game engine integration over TCP socket.
 """
 
 from dataclasses import dataclass, field
+import re
 from typing import Optional, List, Callable, Any
 
 from src.models.time_signature import TimeSignature
@@ -30,6 +31,8 @@ class GameState:
         measure (int): Current measure index.
         step_in_measure (int): Current pulse index inside the measure.
         time_signature (str): Active time signature string ('4/4', '3/4', '6/8', '6/4').
+        key_center (str): Active musical key center, such as 'D' or 'F#'.
+        raw_valence/raw_arousal (Optional[float]): Most recently received affective values.
     """
 
     x: Optional[float] = None
@@ -49,6 +52,9 @@ class GameState:
     measure: int = 0
     step_in_measure: int = 0
     time_signature: str = "4/4"
+    key_center: str = "D"
+    raw_valence: Optional[float] = None
+    raw_arousal: Optional[float] = None
     silence_callbacks: List[Callable[[], Any]] = field(default_factory=list)
 
     def trigger_silence(self) -> None:
@@ -84,6 +90,13 @@ class GameState:
         self.x = norm_x
         self.y = norm_y
 
+    def set_key_center(self, key_center: str) -> None:
+        """Set the display key center using a scientific pitch-class spelling."""
+        normalized = str(key_center).strip()
+        if not re.fullmatch(r"[A-Ga-g](?:#|b)?", normalized):
+            raise ValueError(f"Unsupported key center '{key_center}'")
+        self.key_center = normalized[0].upper() + normalized[1:]
+
     def set_time_signature(self, sig: str) -> None:
         """
         Set meter from one of the 4 standard time signatures:
@@ -118,6 +131,9 @@ class GameState:
         """
         self.x = None
         self.y = None
+        self.raw_valence = None
+        self.raw_arousal = None
+        self.key_center = "D"
         self.health = 100.0
         self.enemies = 0.0
         self.paused = True
