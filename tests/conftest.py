@@ -1,6 +1,11 @@
+import asyncio
 import sys
 from pathlib import Path
 import pytest
+
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Ensure repository root is on sys.path
 repo_root = Path(__file__).resolve().parent.parent
