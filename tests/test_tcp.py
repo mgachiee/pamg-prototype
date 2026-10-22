@@ -143,7 +143,7 @@ def test_tcp_telemetry_valence_arousal():
     asyncio.run(_run())
 
 
-def test_tcp_telemetry_preserves_raw_va_and_key_center():
+def test_tcp_telemetry_maps_va_when_xy_is_omitted():
     from src.core.packet_handler import PacketHandler
 
     state = GameState()
@@ -160,8 +160,8 @@ def test_tcp_telemetry_preserves_raw_va_and_key_center():
 
     assert state.raw_valence == -0.5
     assert state.raw_arousal == 0.75
-    assert state.x is None
-    assert state.y is None
+    assert state.x == pytest.approx(0.25)
+    assert state.y == pytest.approx(0.75)
     assert state.key_center == "F#"
     assert response["key_center"] == "F#"
     assert response["raw_valence"] == -0.5

@@ -73,6 +73,7 @@ class NoteLogger:
         os.makedirs(os.path.dirname(self.log_path) if os.path.dirname(self.log_path) else ".", exist_ok=True)
         self._file = None
         self._session_started = False
+        self._pending_state_updates = []
 
     @staticmethod
     def _resolve_log_path(log_path: str) -> str:
@@ -110,6 +111,9 @@ class NoteLogger:
                 f"{'Timestamp':<12} | {'Pos (M:B:S:P)':<16} | {'Agent':<11} | {'Instrument (Ch)':<24} | {'Note':<10} | {'Vel':<4} | {'Dur(s)':<7} | {'Artic':<8}\n"
                 f"{'-'*95}\n"
             )
+            for update in self._pending_state_updates:
+                self._file.write(update)
+            self._pending_state_updates.clear()
             self._file.flush()
             self._session_started = True
         except Exception as e:
@@ -156,6 +160,33 @@ class NoteLogger:
             self._file.flush()
         except Exception:
             pass
+
+    def log_state_update(
+        self,
+        raw_valence: Optional[float],
+        raw_arousal: Optional[float],
+        normalized_valence: Optional[float],
+        normalized_arousal: Optional[float],
+        tempo: float,
+        time_signature: str,
+        key_center: str,
+        seed: int,
+    ) -> None:
+        """Log a client-driven state or music-configuration update."""
+        line = (
+            f"{time.strftime('%H:%M:%S')} | STATE UPDATE | "
+            f"Received VA: V={self._format_value(raw_valence)} | A={self._format_value(raw_arousal)} | "
+            f"Normalized XY: X={self._format_value(normalized_valence)} | Y={self._format_value(normalized_arousal)} | "
+            f"Key: {key_center} | Meter: {time_signature} | Tempo: {float(tempo):.1f} | Seed: {seed}\n"
+        )
+        if not self._session_started or self._file is None:
+            self._pending_state_updates.append(line)
+            return
+        try:
+            self._file.write(line)
+            self._file.flush()
+        except Exception as e:
+            print(f"[NoteLogger Warning] Could not write state update: {e}")
 
     def close(self) -> None:
         """Close the log file cleanly."""

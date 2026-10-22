@@ -47,3 +47,17 @@ def test_note_logger_handles_missing_received_va(tmp_path):
     logger.close()
 
     assert "Received VA: V=N/A | A=N/A" in log_path.read_text(encoding="utf-8")
+
+
+def test_note_logger_records_state_updates_before_session_starts(tmp_path):
+    log_path = tmp_path / "realtime_output.log"
+    logger = NoteLogger(str(log_path))
+
+    logger.log_state_update(-0.5, 0.75, 0.25, 0.75, 128, "3/4", "F#", 99)
+    logger.start_session("D", "4/4", 120, None, None, 0.0, 0.0, "Preset A")
+
+    contents = log_path.read_text(encoding="utf-8")
+    assert "STATE UPDATE" in contents
+    assert "Received VA: V=-0.500 | A=0.750" in contents
+    assert "Normalized XY: X=0.250 | Y=0.750" in contents
+    assert "Meter: 3/4 | Tempo: 128.0 | Seed: 99" in contents

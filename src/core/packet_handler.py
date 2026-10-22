@@ -4,6 +4,7 @@ PacketHandler for incoming telemetry and lifecycle packets from the game client.
 
 from typing import Any, Dict
 from src.core.logger import Logger
+from src.core.note_logger import note_logger
 from src.models.game_state import GameState
 
 logger = Logger()
@@ -71,21 +72,21 @@ class PacketHandler:
         Ingest telemetry updates: valence, arousal, macro_state (time signature, bpm),
         tempo, seed, or direct coordinates.
         """
-        # 1. Valence / Arousal are retained as diagnostic telemetry.  The
-        # documented generation controls are direct XY coordinates; affective
-        # aliases must not silently change musical state.
+        # 1. Keep affective values for diagnostics and use them when XY is absent.
         valence = packet.get("valence")
         arousal = packet.get("arousal")
+        macro_state = packet.get("macro_state")
+        music_cfg = macro_state.get("music_config") if isinstance(macro_state, dict) else None
+        if isinstance(music_cfg, dict):
+            valence = valence if valence is not None else music_cfg.get("valence")
+            arousal = arousal if arousal is not None else music_cfg.get("arousal")
         if valence is not None or arousal is not None:
             if valence is not None:
                 self.state.raw_valence = float(valence)
             if arousal is not None:
                 self.state.raw_arousal = float(arousal)
-            default_v = self.state.raw_valence if self.state.raw_valence is not None else 0.5
-            default_a = self.state.raw_arousal if self.state.raw_arousal is not None else 0.5
-            v = valence if valence is not None else default_v
-            a = arousal if arousal is not None else default_a
-            # Do not map diagnostic values into generation coordinates.
+            if "x" not in packet and "y" not in packet and valence is not None and arousal is not None:
+                self.state.set_valence_arousal(valence, arousal)
 
         # Direct x / y overrides
         if "x" in packet and packet["x"] is not None:
@@ -94,9 +95,7 @@ class PacketHandler:
             self.state.y = max(0.0, min(1.0, float(packet["y"])))
 
         # 2. MacroState / MusicConfig ingestion
-        macro_state = packet.get("macro_state")
         if isinstance(macro_state, dict):
-            music_cfg = macro_state.get("music_config")
             if isinstance(music_cfg, dict):
                 key_center = music_cfg.get("key_center") or music_cfg.get("key")
                 if key_center is not None:
@@ -160,6 +159,16 @@ class PacketHandler:
             self.state.structure_dirty = True
 
         self.state.paused = False  # Telemetry implies active gameplay
+        note_logger.log_state_update(
+            raw_valence=self.state.raw_valence,
+            raw_arousal=self.state.raw_arousal,
+            normalized_valence=self.state.x,
+            normalized_arousal=self.state.y,
+            tempo=self.state.tempo,
+            time_signature=self.state.time_signature,
+            key_center=self.state.key_center,
+            seed=self.state.base_seed,
+        )
 
         return {
             "status": "ok",
@@ -296,6 +305,17 @@ class PacketHandler:
 
         if structure_changed:
             self.state.structure_dirty = True
+
+        note_logger.log_state_update(
+            raw_valence=self.state.raw_valence,
+            raw_arousal=self.state.raw_arousal,
+            normalized_valence=self.state.x,
+            normalized_arousal=self.state.y,
+            tempo=self.state.tempo,
+            time_signature=self.state.time_signature,
+            key_center=self.state.key_center,
+            seed=self.state.base_seed,
+        )
 
         return {
             "status": "ok",

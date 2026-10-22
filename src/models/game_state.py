@@ -80,12 +80,8 @@ class GameState:
         v = float(valence)
         a = float(arousal)
 
-        if v < 0.0 or a < 0.0:
-            norm_x = (max(-1.0, min(1.0, v)) + 1.0) / 2.0
-            norm_y = (max(-1.0, min(1.0, a)) + 1.0) / 2.0
-        else:
-            norm_x = max(0.0, min(1.0, v))
-            norm_y = max(0.0, min(1.0, a))
+        norm_x = (max(-1.0, min(1.0, v)) + 1.0) / 2.0 if v < 0.0 else max(0.0, min(1.0, v))
+        norm_y = (max(-1.0, min(1.0, a)) + 1.0) / 2.0 if a < 0.0 else max(0.0, min(1.0, a))
 
         self.x = norm_x
         self.y = norm_y

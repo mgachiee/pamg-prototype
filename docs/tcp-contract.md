@@ -16,10 +16,10 @@ Only these fields may change generated musical state.
 
 ## Diagnostic compatibility fields
 
-`health`, `enemies`, `valence`, `arousal`, and `key_center` may be accepted and
-reported for integration compatibility, but they do not directly alter PAMG
-generation state. XY coordinates must be supplied explicitly for preset
-movement.
+`health`, `enemies`, and `key_center` may be accepted and reported for
+integration compatibility. `valence` and `arousal` are also accepted as
+`[-1, 1]` affective coordinates when `x` and `y` are omitted; explicit `x` and
+`y` take precedence.
 
 ## Lifecycle actions
 
