@@ -141,8 +141,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path src/assets | Out-Null
           $sf2Target = "src/assets/FluidR3_GM_GS.sf2"
           if (-not (Test-Path $sf2Target)) {
-            Write-Host "Downloading FluidR3_GM_GS.sf2 SoundFont (~144 MB)..."
-            curl.exe -L -f -o $sf2Target "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+            Write-Host "Downloading FluidR3_GM_GS.sf2 SoundFont (~151 MB)..."
+            curl.exe -L --retry 5 --retry-all-errors --connect-timeout 30 -f -o $sf2Target "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+            if ((Get-FileHash $sf2Target -Algorithm SHA256).Hash -ne "545B2833936F15F04DF5F0C5C4096B3BA6CED46EC7031F61991CAE46F8681986") { throw "SoundFont checksum mismatch" }
           }
 
       - name: Download SoundFont Asset (Linux / macOS)
@@ -150,8 +151,9 @@ jobs:
         run: |
           mkdir -p src/assets
           if [ ! -f "src/assets/FluidR3_GM_GS.sf2" ]; then
-            echo "Downloading FluidR3_GM_GS.sf2 SoundFont (~144 MB)..."
-            curl -L -f -o src/assets/FluidR3_GM_GS.sf2 "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+            echo "Downloading FluidR3_GM_GS.sf2 SoundFont (~151 MB)..."
+            curl -L --retry 5 --retry-all-errors --connect-timeout 30 -f -o src/assets/FluidR3_GM_GS.sf2 "https://archive.org/download/fluidr3-gm-gs/FluidR3_GM_GS.sf2"
+            echo "545B2833936F15F04DF5F0C5C4096B3BA6CED46EC7031F61991CAE46F8681986  src/assets/FluidR3_GM_GS.sf2" | sha256sum -c -
           fi
 
       - name: Install Python Dependencies
