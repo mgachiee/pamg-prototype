@@ -5,6 +5,23 @@ import pytest
 from src.core.tcp_server import start_tcp_server
 from src.models.game_state import GameState
 
+TCP_TEST_TIMEOUT_SECONDS = 5
+
+
+async def _open_connection(port: int):
+    return await asyncio.wait_for(
+        asyncio.open_connection("127.0.0.1", port),
+        timeout=TCP_TEST_TIMEOUT_SECONDS,
+    )
+
+
+async def _read_json(reader):
+    line = await asyncio.wait_for(
+        reader.readline(),
+        timeout=TCP_TEST_TIMEOUT_SECONDS,
+    )
+    return json.loads(line.decode("utf-8"))
+
 
 def test_tcp_server_updates_game_state_flat():
     async def _run():
@@ -12,7 +29,7 @@ def test_tcp_server_updates_game_state_flat():
         server = await start_tcp_server(host="127.0.0.1", port=9091, state=state)
 
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9091)
+            reader, writer = await _open_connection(9091)
             try:
                 # Send valid flat payload
                 payload = {
@@ -25,8 +42,7 @@ def test_tcp_server_updates_game_state_flat():
                 writer.write((json.dumps(payload) + "\n").encode("utf-8"))
                 await writer.drain()
 
-                resp_line = await reader.readline()
-                resp = json.loads(resp_line.decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert resp["x"] == 0.85
                 assert resp["y"] == 0.15
@@ -44,8 +60,7 @@ def test_tcp_server_updates_game_state_flat():
                 # Send invalid JSON
                 writer.write(b"NOT_A_JSON_STRING\n")
                 await writer.drain()
-                err_resp_line = await reader.readline()
-                err_resp = json.loads(err_resp_line.decode("utf-8"))
+                err_resp = await _read_json(reader)
                 assert err_resp["status"] == "error"
 
             finally:
@@ -61,14 +76,14 @@ def test_tcp_handshake_and_sidecar():
         server = await start_tcp_server(host="127.0.0.1", port=9092, state=state)
 
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9092)
+            reader, writer = await _open_connection(9092)
             try:
                 # Send handshake packet
                 handshake_packet = {"action": "handshake", "sidecar": True}
                 writer.write((json.dumps(handshake_packet) + "\n").encode("utf-8"))
                 await writer.drain()
 
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ready"
                 assert resp["engine_state"] == "ready"
                 assert resp["sidecar"] is True
@@ -85,7 +100,7 @@ def test_tcp_telemetry_valence_arousal():
         server = await start_tcp_server(host="127.0.0.1", port=9093, state=state)
 
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9093)
+            reader, writer = await _open_connection(9093)
             try:
                 # Affective aliases remain diagnostic; direct XY controls
                 # generation state.
@@ -101,7 +116,7 @@ def test_tcp_telemetry_valence_arousal():
                 writer.write((json.dumps(telemetry_packet) + "\n").encode("utf-8"))
                 await writer.drain()
 
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert state.x == 0.8
                 assert state.y == 0.2
@@ -117,7 +132,7 @@ def test_tcp_telemetry_valence_arousal():
                 writer.write((json.dumps(telemetry_center) + "\n").encode("utf-8"))
                 await writer.drain()
 
-                resp2 = json.loads((await reader.readline()).decode("utf-8"))
+                resp2 = await _read_json(reader)
                 assert resp2["status"] == "ok"
                 assert abs(state.x - 0.8) < 1e-4
                 assert abs(state.y - 0.2) < 1e-4
@@ -159,7 +174,7 @@ def test_tcp_telemetry_time_signatures():
         server = await start_tcp_server(host="127.0.0.1", port=9094, state=state)
 
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9094)
+            reader, writer = await _open_connection(9094)
             try:
                 # 1. 3/4 meter
                 packet_34 = {
@@ -168,7 +183,7 @@ def test_tcp_telemetry_time_signatures():
                 }
                 writer.write((json.dumps(packet_34) + "\n").encode("utf-8"))
                 await writer.drain()
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert state.loop_size == 3
                 assert state.grain == 4
@@ -181,7 +196,7 @@ def test_tcp_telemetry_time_signatures():
                 }
                 writer.write((json.dumps(packet_68) + "\n").encode("utf-8"))
                 await writer.drain()
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert state.loop_size == 6
                 assert state.grain == 2
@@ -194,7 +209,7 @@ def test_tcp_telemetry_time_signatures():
                 }
                 writer.write((json.dumps(packet_64) + "\n").encode("utf-8"))
                 await writer.drain()
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert state.loop_size == 6
                 assert state.grain == 4
@@ -207,7 +222,7 @@ def test_tcp_telemetry_time_signatures():
                 }
                 writer.write((json.dumps(packet_44) + "\n").encode("utf-8"))
                 await writer.drain()
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 assert state.loop_size == 4
                 assert state.grain == 4
@@ -220,7 +235,7 @@ def test_tcp_telemetry_time_signatures():
                 }
                 writer.write((json.dumps(packet_invalid) + "\n").encode("utf-8"))
                 await writer.drain()
-                err_resp = json.loads((await reader.readline()).decode("utf-8"))
+                err_resp = await _read_json(reader)
                 assert err_resp["status"] == "error"
             finally:
                 writer.close()
@@ -235,26 +250,26 @@ def test_tcp_lifecycle_actions():
         server = await start_tcp_server(host="127.0.0.1", port=9095, state=state)
 
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9095)
+            reader, writer = await _open_connection(9095)
             try:
                 # 1. Status query (initial state is paused in standby)
                 writer.write(b'{"action": "status"}\n')
                 await writer.drain()
-                status_resp = json.loads((await reader.readline()).decode("utf-8"))
+                status_resp = await _read_json(reader)
                 assert status_resp["status"] == "ok"
                 assert status_resp["engine_state"] == "paused"
 
                 # 2. Resume
                 writer.write(b'{"action": "resume"}\n')
                 await writer.drain()
-                resume_resp = json.loads((await reader.readline()).decode("utf-8"))
+                resume_resp = await _read_json(reader)
                 assert resume_resp["status"] == "resumed"
                 assert state.paused is False
 
                 # 3. Pause
                 writer.write(b'{"action": "pause"}\n')
                 await writer.drain()
-                pause_resp = json.loads((await reader.readline()).decode("utf-8"))
+                pause_resp = await _read_json(reader)
                 assert pause_resp["status"] == "paused"
                 assert state.paused is True
 
@@ -262,14 +277,14 @@ def test_tcp_lifecycle_actions():
                 state.x = 0.9
                 writer.write(b'{"action": "reset"}\n')
                 await writer.drain()
-                reset_resp = json.loads((await reader.readline()).decode("utf-8"))
+                reset_resp = await _read_json(reader)
                 assert reset_resp["status"] == "ok"
                 assert state.x is None
 
                 # 5. Shutdown
                 writer.write(b'{"action": "shutdown"}\n')
                 await writer.drain()
-                shut_resp = json.loads((await reader.readline()).decode("utf-8"))
+                shut_resp = await _read_json(reader)
                 assert shut_resp["status"] == "shutting_down"
                 assert state.is_alive is False
             finally:
@@ -317,7 +332,11 @@ def test_end_to_end_test_client_all_phases(dummy_port):
                     },
                 )
                 client_thread.start()
-                await asyncio.to_thread(client_thread.join)
+                await asyncio.wait_for(
+                    asyncio.to_thread(client_thread.join, 30),
+                    timeout=31,
+                )
+                assert not client_thread.is_alive(), "TCP client thread did not finish"
                 # Wait for clock to exit cleanly on shutdown
                 await clock_task
 
@@ -349,10 +368,10 @@ def test_tcp_client_disconnect_sidecar_shuts_down_cleanly(dummy_port):
             )
 
             async with server:
-                reader, writer = await asyncio.open_connection("127.0.0.1", 9097)
+                reader, writer = await _open_connection(9097)
                 writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
                 await writer.drain()
-                resp = json.loads((await reader.readline()).decode("utf-8"))
+                resp = await _read_json(reader)
                 assert resp["status"] == "ok"
                 # Abrupt client disconnection (simulating game closing or crashing)
                 writer.close()
@@ -381,10 +400,10 @@ def test_tcp_client_disconnect_triggers_silence_non_sidecar():
     async def _main():
         server = await start_tcp_server(host="127.0.0.1", port=9098, state=state, sidecar=False)
         async with server:
-            reader, writer = await asyncio.open_connection("127.0.0.1", 9098)
+            reader, writer = await _open_connection(9098)
             writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
             await writer.drain()
-            resp = json.loads((await reader.readline()).decode("utf-8"))
+            resp = await _read_json(reader)
             assert resp["status"] == "ok"
             assert state.paused is True
 

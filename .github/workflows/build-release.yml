@@ -162,7 +162,7 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          pytest tests/
+          pytest tests/ -vv --timeout=60 --timeout-method=thread
 
       - name: Build Executable with PyInstaller
         run: |
