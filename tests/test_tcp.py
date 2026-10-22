@@ -409,7 +409,11 @@ def test_tcp_client_disconnect_triggers_silence_non_sidecar():
 
             # Disconnect client
             writer.close()
-            await writer.wait_closed()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), timeout=1)
+            except asyncio.TimeoutError:
+                # macOS can leave the graceful close pending while the server reads EOF.
+                writer.transport.abort()
             # Allow server task loop to process disconnect
             await asyncio.sleep(0.05)
 
