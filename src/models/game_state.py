@@ -33,6 +33,7 @@ class GameState:
         time_signature (str): Active time signature string ('4/4', '3/4', '6/8', '6/4').
         key_center (str): Active musical key center, such as 'D' or 'F#'.
         raw_valence/raw_arousal (Optional[float]): Most recently received affective values.
+        xy_from_affect (bool): Whether the current XY coordinates came from VA input.
     """
 
     x: Optional[float] = None
@@ -55,6 +56,7 @@ class GameState:
     key_center: str = "D"
     raw_valence: Optional[float] = None
     raw_arousal: Optional[float] = None
+    xy_from_affect: bool = False
     silence_callbacks: List[Callable[[], Any]] = field(default_factory=list)
 
     def trigger_silence(self) -> None:
@@ -85,6 +87,7 @@ class GameState:
 
         self.x = norm_x
         self.y = norm_y
+        self.xy_from_affect = True
 
     def set_key_center(self, key_center: str) -> None:
         """Set the display key center using a scientific pitch-class spelling."""
@@ -129,6 +132,7 @@ class GameState:
         self.y = None
         self.raw_valence = None
         self.raw_arousal = None
+        self.xy_from_affect = False
         self.key_center = "D"
         self.health = 100.0
         self.enemies = 0.0

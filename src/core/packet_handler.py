@@ -75,6 +75,9 @@ class PacketHandler:
         # 1. Keep affective values for diagnostics and use them when XY is absent.
         valence = packet.get("valence")
         arousal = packet.get("arousal")
+        has_explicit_xy = any(packet.get(name) is not None for name in ("x", "y"))
+        if has_explicit_xy:
+            self.state.xy_from_affect = False
         macro_state = packet.get("macro_state")
         music_cfg = macro_state.get("music_config") if isinstance(macro_state, dict) else None
         if isinstance(music_cfg, dict):
@@ -85,7 +88,12 @@ class PacketHandler:
                 self.state.raw_valence = float(valence)
             if arousal is not None:
                 self.state.raw_arousal = float(arousal)
-            if "x" not in packet and "y" not in packet and valence is not None and arousal is not None:
+            if (
+                not has_explicit_xy
+                and (self.state.xy_from_affect or (self.state.x is None and self.state.y is None))
+                and valence is not None
+                and arousal is not None
+            ):
                 self.state.set_valence_arousal(valence, arousal)
 
         # Direct x / y overrides
@@ -248,6 +256,9 @@ class PacketHandler:
 
     def _handle_flat_telemetry(self, packet: Dict[str, Any]) -> Dict[str, Any]:
         """Fallback handler for flat JSON packets without an action key."""
+        has_explicit_xy = any(packet.get(name) is not None for name in ("x", "y"))
+        if has_explicit_xy:
+            self.state.xy_from_affect = False
         if "valence" in packet or "arousal" in packet:
             if "valence" in packet:
                 self.state.raw_valence = float(packet["valence"])
@@ -255,7 +266,8 @@ class PacketHandler:
                 self.state.raw_arousal = float(packet["arousal"])
             v = packet.get("valence", self.state.raw_valence if self.state.raw_valence is not None else 0.5)
             a = packet.get("arousal", self.state.raw_arousal if self.state.raw_arousal is not None else 0.5)
-            self.state.set_valence_arousal(v, a)
+            if not has_explicit_xy and (self.state.xy_from_affect or (self.state.x is None and self.state.y is None)):
+                self.state.set_valence_arousal(v, a)
 
         key_center = packet.get("key_center") or packet.get("key")
         if key_center is not None:

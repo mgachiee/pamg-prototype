@@ -168,6 +168,32 @@ def test_tcp_telemetry_maps_va_when_xy_is_omitted():
     assert response["raw_arousal"] == 0.75
 
 
+def test_tcp_telemetry_keeps_explicit_xy_authoritative():
+    from src.core.packet_handler import PacketHandler
+
+    state = GameState()
+    handler = PacketHandler(state)
+
+    handler.handle_packet({"action": "telemetry", "x": 0.8, "y": 0.2})
+    handler.handle_packet({"action": "telemetry", "valence": -0.5, "arousal": 0.5})
+
+    assert state.x == pytest.approx(0.8)
+    assert state.y == pytest.approx(0.2)
+
+
+def test_tcp_telemetry_updates_va_driven_xy():
+    from src.core.packet_handler import PacketHandler
+
+    state = GameState()
+    handler = PacketHandler(state)
+
+    handler.handle_packet({"action": "telemetry", "valence": -1.0, "arousal": -1.0})
+    handler.handle_packet({"action": "telemetry", "valence": 1.0, "arousal": 1.0})
+
+    assert state.x == pytest.approx(1.0)
+    assert state.y == pytest.approx(1.0)
+
+
 def test_tcp_telemetry_time_signatures():
     async def _run():
         state = GameState()
