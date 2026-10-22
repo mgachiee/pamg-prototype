@@ -77,10 +77,9 @@ async def handle_client(
         logger.info(f"[TCP Server] Client disconnected: {addr}")
         try:
             writer.close()
-            await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-        except (asyncio.TimeoutError, ConnectionError, OSError):
-            # Windows can leave the overlapped close pending after peer disconnect.
             writer.transport.abort()
+        except (ConnectionError, OSError):
+            pass
 
         # Immediately pause and silence all audio ports and active notes
         state.trigger_silence()
