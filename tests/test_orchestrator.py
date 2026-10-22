@@ -44,6 +44,17 @@ def test_orchestrator_harmony_instruments_gating():
     assert channels_full == [2, 3, 4]
 
 
+def test_orchestrator_deduplicates_unchanged_harmony_cc_values():
+    oa = OrchestratorAgent(harmony_channels=[2], harmony_layer_weights=[1.0])
+    oa.consume_cc_changes()
+
+    oa.update_params(harmony_layer_weights=[1.0])
+    assert oa.consume_cc_changes() == []
+
+    oa.update_params(harmony_layer_weights=[0.5])
+    assert oa.consume_cc_changes() == [(2, 11, 64)]
+
+
 def test_orchestrator_range_clamping():
     oa = OrchestratorAgent(
         melody_channels=[0],
@@ -136,7 +147,30 @@ def test_orchestrator_program_changes_and_initialization():
         (5, 0),   # Harmony Piano
         (6, 73),  # Harmony Woodwinds
         (7, 61),  # Harmony Brass
-        (9, 48),  # Percussion Orchestra Kit
     ]
     assert pc == expected
+
+
+def test_orchestrator_allows_32nd_arpeggio_only_for_solo_piano():
+    event = {
+        "note": 60,
+        "velocity": 80,
+        "is_arpeggio": True,
+        "arpeggio_rate_denominator": 32,
+    }
+    oa = OrchestratorAgent(
+        melody_channels=[0, 1, 2, 3],
+        harmony_channels=[4, 5, 6, 7],
+        ha_register_ins=1,
+        ha_ins_plus_minus=1.0,
+    )
+    oa.update_params(
+        channel_families={4: "strings", 5: "keys", 6: "woodwinds", 7: "brass"},
+    )
+
+    # Registration priority selects Piano as the only active harmony layer.
+    assert len(oa.process_tick([], [event])) == 1
+
+    oa.update_params(ha_register_ins=2)
+    assert oa.process_tick([], [event]) == []
 

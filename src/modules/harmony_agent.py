@@ -5,7 +5,7 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 from src.core.configs import HARMONY_TEMPLATE
-from src.core.chord_dictionary import get_voiced_pitch_classes
+from src.core.chord_dictionary import get_voiced_pitch_classes, query_pitch_class_set
 from src.core.harmony_grammar import HarmonicProgressionSelector
 from src.models.harmony_types import ChordDefinition, ChordPoolLevel
 
@@ -35,6 +35,7 @@ class HarmonyAgent:
         key_root: int = 60,
         voice_count: int = 3,
         tension: float = 1.0,
+        mode: str = "major",
         chord_complexity: float = 0.0,
         harmony_range: Tuple[int, int] = (48, 72),
         bass_range: Tuple[int, int] = (36, 48),
@@ -67,6 +68,7 @@ class HarmonyAgent:
         self.chord_change_probability = 1.0
         self.chord_complexity = float(chord_complexity)  # Cpx Prog (0.0..1.0)
         self.tension = float(tension)                     # Tension index (1..12)
+        self.mode = self._normalize_mode(mode)
         self.harmony_add_probability = 0.0
         self.harmony_sub_probability = 0.0
         self.harmony_accent_probability = 0.0
@@ -75,18 +77,22 @@ class HarmonyAgent:
         self._progression_selector = HarmonicProgressionSelector(
             tonic_semitone=self.key_root % 12,
             complexity_progression=self.chord_complexity,
+            mode=self.mode,
             seed=seed,
         )
 
         self._post_filter: Optional[List[int]] = None
         self._accent_beats = set()
+        self._moved_list = set()
         self._arpeggio_step = 0
+        self.harmony_move = 0.0
         self.velocity = float(velocity)
         self._normal_velocity_range = (58, 70)
         self._accent_velocity_range = (70, 80)
         self._update_velocity_ranges()
         self.midi_channel = 2
         self._last_measure_index: Optional[int] = None
+        self._arpeggio_segment_enabled = False
 
         self._current_chord_def: ChordDefinition = self._progression_selector.get_current_chord()
         self._current_chord: List[int] = self._voice_chord(self._current_chord_def)
@@ -125,8 +131,19 @@ class HarmonyAgent:
         return int(self._current_chord_def.pool)
 
     def get_roman_numeral(self) -> str:
-        """Return the current Roman numeral symbol (e.g. 'I', 'V', 'N7')."""
-        return self._current_chord_def.roman
+        """Return the mode-appropriate Roman numeral display label."""
+        roman = self._current_chord_def.roman
+        if self.mode != "minor":
+            return roman
+        return {
+            "I": "i",
+            "IV": "iv",
+            "V": "v",
+            "ii": "ii°",
+            "iii": "III",
+            "vi": "VI",
+            "vii°": "VII",
+        }.get(roman, roman)
 
     def get_chord_pitch_classes(self) -> List[int]:
         """
@@ -134,11 +151,28 @@ class HarmonyAgent:
         according to the 12-level tension table (§4.2).
         """
         raw_tension = max(1, min(12, int(round(self.tension))))
-        return list(self._current_chord_def.ordered_pitch_classes[:raw_tension])
+        pitch_classes = query_pitch_class_set(
+            self._current_chord_def.roman,
+            raw_tension,
+            tonic_semitone=self.key_root % 12,
+            mode=self.mode,
+        )
+        if self._post_filter is not None:
+            allowed = {p % 12 for p in self._post_filter}
+            pitch_classes = [pc for pc in pitch_classes if pc in allowed]
+        return pitch_classes
+
+    def on_phrase_start(self) -> None:
+        """Open the documented phrase-level arpeggiation segment."""
+        self._arpeggio_segment_enabled = True
 
     def notify_accents(self, accent_beats: List[int]) -> None:
         """Receive melody accent beats to emphasize harmony onsets."""
         self._accent_beats = {int(beat) for beat in accent_beats}
+
+    def notify_moved_list(self, moved_list: List[int]) -> None:
+        """Receive Melody's moved onsets for shared accent-following."""
+        self._moved_list = {int(index) for index in moved_list}
 
     def set_post_filter(self, pitch_subset: Optional[List[int]]) -> None:
         """Fast-cut post filter to rapidly restrict active pitches."""
@@ -146,6 +180,7 @@ class HarmonyAgent:
             self._post_filter = None
         else:
             self._post_filter = [int(p) for p in pitch_subset]
+        self._current_chord = self._voice_chord(self._current_chord_def)
 
     # ------------------------------------------------------------------
     # Voicing and 12-Level Tension Query
@@ -164,11 +199,13 @@ class HarmonyAgent:
         )
 
         # Apply post filter if present
-        if self._post_filter:
+        if self._post_filter is not None:
             allowed = set(p % 12 for p in self._post_filter)
             filtered = [pc for pc in voiced_pcs if pc in allowed]
-            if filtered:
-                voiced_pcs = filtered
+            voiced_pcs = filtered
+
+        if self._post_filter is not None and not voiced_pcs:
+            return []
 
         # 1. Place voiced harmony notes in the harmony register (MIDI 48..72)
         notes = []
@@ -289,6 +326,8 @@ class HarmonyAgent:
             template = HARMONY_TEMPLATE.get(template_key, HARMONY_TEMPLATE.get("4/4", {}))
             chord_beats = template.get("CHORD", [0, max(0, self.loop_size // 2)])
             future_onsets = [b * self.grain for b in chord_beats if b * self.grain > onset_index]
+            if self.harmony_move > 0:
+                future_onsets.extend(index for index in self._moved_list if index > onset_index)
             if future_onsets:
                 gap = future_onsets[0] - onset_index
             else:
@@ -313,7 +352,7 @@ class HarmonyAgent:
         extreme tension (levels 11-12) switches back to full block chords.
         """
         tension_val = float(self.tension)
-        return 3.0 < tension_val <= 10.5
+        return self._arpeggio_segment_enabled and 3.0 < tension_val <= 10.5
 
     def _build_arpeggio_event(self, pulse_duration: float) -> Optional[dict]:
         """Voice a single broken arpeggio note across active chord tones."""
@@ -335,6 +374,9 @@ class HarmonyAgent:
             "articulation": "legato",
             "channel": self.midi_channel,
             "source": "harmony",
+            "is_arpeggio": True,
+            # OA uses this only for the documented 1/32 solo-Piano rule.
+            "arpeggio_rate_denominator": 4 * self.grain,
         }
 
     def _build_chord_events(
@@ -395,6 +437,15 @@ class HarmonyAgent:
     def update_params(self, **kwargs) -> bool:
         """Apply parameter updates for harmony behavior."""
         changed = False
+
+        if "mode" in kwargs or "ha_mode" in kwargs:
+            new_mode = self._normalize_mode(kwargs.get("ha_mode", kwargs.get("mode")))
+            if new_mode != self.mode:
+                self.mode = new_mode
+                self._progression_selector.set_mode(new_mode)
+                self._current_chord_def = self._progression_selector.get_current_chord()
+                self._current_chord = self._voice_chord(self._current_chord_def)
+                changed = True
 
         if "seed_state" in kwargs and kwargs["seed_state"] is not None:
             ss = kwargs["seed_state"]
@@ -457,6 +508,12 @@ class HarmonyAgent:
                 self.harmony_accent_probability = new_val
                 changed = True
 
+        if "move" in kwargs or "ha_move" in kwargs:
+            new_val = max(0.0, min(1.0, float(kwargs.get("ha_move", kwargs.get("move")))))
+            if new_val != self.harmony_move:
+                self.harmony_move = new_val
+                changed = True
+
         if "key_root" in kwargs:
             new_val = int(kwargs["key_root"])
             if new_val != self.key_root:
@@ -491,3 +548,10 @@ class HarmonyAgent:
                 changed = True
 
         return changed
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"major", "minor"}:
+            raise ValueError("Harmony mode must be 'major' or 'minor'")
+        return normalized

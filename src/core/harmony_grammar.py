@@ -86,6 +86,7 @@ class HarmonicProgressionSelector:
         self,
         tonic_semitone: int = 0,
         complexity_progression: float = 0.0,
+        mode: str = "major",
         seed: Optional[int] = None,
     ):
         """
@@ -97,9 +98,10 @@ class HarmonicProgressionSelector:
             seed: Optional RNG seed.
         """
         self.tonic_semitone = tonic_semitone
+        self.mode = self._normalize_mode(mode)
         self.complexity_progression = max(0.0, min(1.0, float(complexity_progression)))
         self.rng = random.Random(seed)
-        self.dictionary = create_chord_dictionary(self.tonic_semitone)
+        self.dictionary = create_chord_dictionary(self.tonic_semitone, self.mode)
 
         self.current_roman = "I"
         self._last_pool_level = ChordPoolLevel.POOL_1
@@ -107,7 +109,23 @@ class HarmonicProgressionSelector:
     def set_tonic(self, tonic_semitone: int) -> None:
         """Update the tonic root pitch center."""
         self.tonic_semitone = tonic_semitone % 12
-        self.dictionary = create_chord_dictionary(self.tonic_semitone)
+        self.dictionary = create_chord_dictionary(self.tonic_semitone, self.mode)
+
+    def set_mode(self, mode: str) -> None:
+        """Switch the active major/minor tonal grammar."""
+        normalized = self._normalize_mode(mode)
+        if normalized != self.mode:
+            self.mode = normalized
+            self.dictionary = create_chord_dictionary(self.tonic_semitone, self.mode)
+            self.current_roman = "I"
+            self._last_pool_level = ChordPoolLevel.POOL_1
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"major", "minor"}:
+            raise ValueError("Harmony mode must be 'major' or 'minor'")
+        return normalized
 
     def set_complexity(self, complexity_progression: float) -> None:
         """Update the Progression Complexity factor (Cpx Prog)."""

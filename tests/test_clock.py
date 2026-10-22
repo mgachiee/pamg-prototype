@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from unittest.mock import patch
 
-from src.core.clock import _preset_label, run_clock
+from src.core.clock import _apply_continuous_params, _preset_label, run_clock
 from src.core.routing import RoutingType
 
 
@@ -12,6 +12,27 @@ def test_preset_label_for_corners_and_blends():
     assert _preset_label(0.0, 1.0) == "Preset C"
     assert _preset_label(1.0, 1.0) == "Preset D"
     assert _preset_label(0.5, 0.5) == "Interpolated"
+
+
+def test_continuous_layer_weights_are_forwarded_every_update():
+    from dataclasses import replace
+    from unittest.mock import Mock
+    from src.core.configs import PRESET_A
+    from src.core.preset_interpolator import MultiParameterPresetInterpolator
+
+    preset_c = replace(PRESET_A, oa_harmony_layer_weights=[0.2, 0.4, 0.6, 0.8])
+    interpolator = MultiParameterPresetInterpolator(PRESET_A, PRESET_A, preset_c, preset_c)
+    params_a = interpolator.update(0.0, 0.0, 0.1)
+    params_c = interpolator.update(0.0, 1.0, 0.1)
+    agents = [Mock() for _ in range(4)]
+
+    _apply_continuous_params(*agents, params_a)
+    _apply_continuous_params(*agents, params_c)
+
+    oa = agents[3]
+    assert oa.update_params.call_count == 2
+    assert oa.update_params.call_args_list[0].kwargs["harmony_layer_weights"] == params_a.oa_harmony_layer_weights
+    assert oa.update_params.call_args_list[1].kwargs["harmony_layer_weights"] == params_c.oa_harmony_layer_weights
 
 
 def test_clock_validation_non_positive_tempo():
@@ -24,6 +45,15 @@ def test_clock_validation_non_positive_tempo():
                 routing_mode=RoutingType.single_port,
             )
         )
+
+
+def test_phrase_boundaries_use_loop_index():
+    from src.core.clock import _is_phrase_start
+
+    assert _is_phrase_start(local_index=0, loop_index=0, grain=4, phrase_length=2)
+    assert not _is_phrase_start(local_index=0, loop_index=1, grain=4, phrase_length=2)
+    assert _is_phrase_start(local_index=0, loop_index=2, grain=4, phrase_length=2)
+    assert not _is_phrase_start(local_index=1, loop_index=2, grain=4, phrase_length=2)
 
 
 def test_clock_validation_negative_tempo():

@@ -19,7 +19,10 @@ A high-performance, agent-driven MIDI sequencer prototype designed for real-time
 This prototype is based on and inspired by the study:
 [A Progressive-Adaptive Music Generator (PAMG)](https://dl.acm.org/doi/epdf/10.1145/3677996.3678291) (Duarte, A. E. L., 2024).
 
-For details on the specific implementation rules and architectural refinements added to this prototype, see [Custom Implementations & Rules](.github/docs/custom_implementations.md).
+The normative project behavior is documented in [docs/context.md](docs/context.md),
+[docs/technical-reference.md](docs/technical-reference.md), and
+[docs/implementation-audit.md](docs/implementation-audit.md). Percussion-specific
+demo observations are recorded in [docs/pa-observations.md](docs/pa-observations.md).
 
 ## Quick Start
 

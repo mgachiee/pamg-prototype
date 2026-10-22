@@ -100,10 +100,15 @@ class MultiParameterPresetInterpolator:
     # Field classification sets
     # ------------------------------------------------------------------
 
-    _DISCRETE_FIELDS = set()
+    _DISCRETE_FIELDS = {
+        "ha_mode",
+        "oa_melody_programs",
+        "oa_harmony_programs",
+        "oa_harmony_layer_mode",
+    }
 
     # List parameters that are safe to interpolate continuously element-wise.
-    _LIST_INTERPOLATED_FIELDS = set()
+    _LIST_INTERPOLATED_FIELDS = {"oa_harmony_layer_weights"}
 
     # List parameters that are discrete per-element; snapped to the winning
     # preset at phrase boundaries (e.g. MIDI program per harmony layer).

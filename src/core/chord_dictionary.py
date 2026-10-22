@@ -23,6 +23,11 @@ CHORD_QUALITY_INTERVALS: Dict[str, Tuple[int, ...]] = {
     "dominant": (0, 7, 4, 10, 2, 5, 9, 3, 8, 11, 6, 1),
     # Diminished: [0, 6, 3, 9, 2, 5, 10, 4, 7, 11, 1, 8]
     "diminished": (0, 6, 3, 9, 2, 5, 10, 4, 7, 11, 1, 8),
+    # Functional chromatic forms named by the PAMG grammar.
+    "neapolitan": (0, 4, 7, 10, 2, 5, 9, 3, 8, 11, 6, 1),
+    "italian_aug6": (0, 4, 9, 7, 2, 5, 10, 3, 8, 11, 6, 1),
+    "french_aug6": (0, 4, 6, 9, 2, 5, 10, 3, 8, 11, 7, 1),
+    "german_aug6": (0, 4, 7, 9, 2, 5, 10, 3, 8, 11, 6, 1),
 }
 
 
@@ -45,7 +50,10 @@ def build_ordered_pitch_classes(root_semitone: int, quality: str) -> Tuple[int, 
 # Precomputed Chord Dictionary across the Western tonal grammar (§4.1)
 # ---------------------------------------------------------------------------
 
-def create_chord_dictionary(tonic_semitone: int = 0) -> Dict[str, ChordDefinition]:
+def create_chord_dictionary(
+    tonic_semitone: int = 0,
+    mode: str = "major",
+) -> Dict[str, ChordDefinition]:
     """
     Generate the dictionary of chords indexed by Roman numeral symbol.
 
@@ -55,18 +63,44 @@ def create_chord_dictionary(tonic_semitone: int = 0) -> Dict[str, ChordDefinitio
     Returns:
         Dict[str, ChordDefinition]: Dictionary of chord definitions.
     """
+    normalized_mode = str(mode).strip().lower()
+    if normalized_mode not in {"major", "minor"}:
+        raise ValueError("Harmony mode must be 'major' or 'minor'")
+
+    # Natural-minor diatonic base: i, ii°, III, iv, v, VI, VII.
+    if normalized_mode == "minor":
+        diatonic = {
+            "I": (0, "minor"),
+            "IV": (5, "minor"),
+            "V": (7, "minor"),
+            "ii": (2, "diminished"),
+            "iii": (3, "major"),
+            "vi": (8, "major"),
+            "vii°": (10, "major"),
+        }
+    else:
+        diatonic = {
+            "I": (0, "major"),
+            "IV": (5, "major"),
+            "V": (7, "major"),
+            "ii": (2, "minor"),
+            "iii": (4, "minor"),
+            "vi": (9, "minor"),
+            "vii°": (11, "diminished"),
+        }
+
     # Raw specifications: (Roman, root_offset, quality, pool_level, display_symbol)
     specs = [
         # Pool 1: Primary diatonic (Reseed gate)
-        ("I", 0, "major", ChordPoolLevel.POOL_1, "I"),
-        ("IV", 5, "major", ChordPoolLevel.POOL_1, "IV"),
-        ("V", 7, "major", ChordPoolLevel.POOL_1, "V"),
+        ("I", *diatonic["I"], ChordPoolLevel.POOL_1, "I"),
+        ("IV", *diatonic["IV"], ChordPoolLevel.POOL_1, "IV"),
+        ("V", *diatonic["V"], ChordPoolLevel.POOL_1, "V"),
 
         # Pool 2: Full diatonic chords
-        ("ii", 2, "minor", ChordPoolLevel.POOL_2, "ii"),
-        ("iii", 4, "minor", ChordPoolLevel.POOL_2, "iii"),
-        ("vi", 9, "minor", ChordPoolLevel.POOL_2, "vi"),
-        ("vii°", 11, "diminished", ChordPoolLevel.POOL_2, "vii°"),
+        ("ii", *diatonic["ii"], ChordPoolLevel.POOL_2, "ii"),
+        ("iii", *diatonic["iii"], ChordPoolLevel.POOL_2, "iii"),
+        ("vi", *diatonic["vi"], ChordPoolLevel.POOL_2, "vi"),
+        ("vii°", *diatonic["vii°"], ChordPoolLevel.POOL_2, "vii°"),
 
         # Pool 3: Secondary dominants & subdominants (Mod tier 1)
         ("V/V", 2, "dominant", ChordPoolLevel.POOL_3, "V/V"),      # D7 in C
@@ -77,10 +111,11 @@ def create_chord_dictionary(tonic_semitone: int = 0) -> Dict[str, ChordDefinitio
         ("IV/IV", 10, "major", ChordPoolLevel.POOL_3, "IV/IV"),    # Bb in C
 
         # Pool 4: Chromatic tension-linked modifications (Mod tier 2)
-        ("N7", 1, "major", ChordPoolLevel.POOL_4, "N7"),          # Neapolitan Db in C
-        ("It+6", 8, "dominant", ChordPoolLevel.POOL_4, "It+6"),   # Italian augmented 6th (Ab-C-F#)
-        ("Fr+6", 8, "dominant", ChordPoolLevel.POOL_4, "Fr+6"),   # French augmented 6th (Ab-C-D-F#)
-        ("Ger+6", 1, "dominant", ChordPoolLevel.POOL_4, "Ger+6"), # German augmented 6th (reclassified as V7/bII)
+        ("N7", 1, "neapolitan", ChordPoolLevel.POOL_4, "N7"),
+        ("It+6", 8, "italian_aug6", ChordPoolLevel.POOL_4, "It+6"),
+        ("Fr+6", 8, "french_aug6", ChordPoolLevel.POOL_4, "Fr+6"),
+        # German+ is functionally treated as V7/bII by the reference grammar.
+        ("Ger+6", 1, "german_aug6", ChordPoolLevel.POOL_4, "V7/bII"),
     ]
 
     chords = {}
@@ -128,3 +163,22 @@ def get_voiced_pitch_classes(
     # Select the most-recently-unlocked (right-most) N pitch classes
     voiced = list(unlocked[-clamped_voices:])
     return voiced
+
+
+def query_pitch_class_set(
+    chord_symbol: str,
+    tension_level: int,
+    tonic_semitone: int = 0,
+    mode: str = "major",
+) -> List[int]:
+    """Query the active tension prefix for a chord symbol.
+
+    This is the explicit runtime form of the documented chord-dictionary
+    contract: ``(ChordSymbol, TensionLevel) -> PitchClassSet``.
+    """
+    dictionary = create_chord_dictionary(tonic_semitone, mode)
+    chord = dictionary.get(chord_symbol)
+    if chord is None:
+        raise KeyError(f"Unknown chord symbol: {chord_symbol}")
+    level = max(1, min(12, int(tension_level)))
+    return list(chord.ordered_pitch_classes[:level])

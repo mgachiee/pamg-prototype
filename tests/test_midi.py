@@ -4,6 +4,7 @@ import pytest
 from src.core.midi_events import normalize_event
 from src.core.midi_io import close_midi_ports
 from src.core.players import play_note, play_ratchet, play_arpeggio, silence_all_notes
+from src.models.midi_event import MidiEvent
 
 
 def test_normalize_event_clamping():
@@ -44,6 +45,40 @@ def test_normalize_event_invalid_duration():
         default_duration=0.5,
     )
     assert ev_nan.duration == 0.5
+
+    ev_inf = normalize_event(
+        {"note": 60, "velocity": 64, "duration": float("inf")},
+        default_channel=0,
+        default_duration=0.5,
+    )
+    assert ev_inf.duration == 0.5
+
+
+def test_midi_event_rejects_fractional_integer_fields():
+    with pytest.raises(ValueError):
+        MidiEvent(note=60.5, velocity=90, duration=0.1, channel=0)
+
+    with pytest.raises(ValueError):
+        MidiEvent(note=60, velocity=90.5, duration=0.1, channel=0)
+
+    with pytest.raises(ValueError):
+        MidiEvent(note=60, velocity=90, duration=0.1, channel=0.5)
+
+    with pytest.raises(ValueError):
+        MidiEvent(note=60, velocity=90, duration=0.1, channel=0, ratchet_count=2.5)
+
+
+def test_midi_event_normalizes_integral_values_to_ints():
+    event = MidiEvent(note=60.0, velocity=90.0, duration=0.1, channel=0.0)
+    assert event.note == 60
+    assert event.velocity == 90
+    assert event.channel == 0
+
+
+def test_midi_event_normalizes_duration_to_float():
+    event = MidiEvent(note=60, velocity=90, duration="0.1", channel=0)
+    assert event.duration == 0.1
+    assert isinstance(event.duration, float)
 
 
 def test_close_midi_ports_idempotency(dummy_port):

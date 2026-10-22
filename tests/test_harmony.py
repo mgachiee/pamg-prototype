@@ -4,6 +4,7 @@ from src.core.chord_dictionary import (
     create_chord_dictionary,
     get_voiced_pitch_classes,
     build_ordered_pitch_classes,
+    query_pitch_class_set,
 )
 from src.core.harmony_grammar import HarmonicProgressionSelector
 from src.modules.harmony_agent import HarmonyAgent
@@ -24,6 +25,11 @@ def test_chord_dictionary_tension_levels():
 
     voiced_triad = get_voiced_pitch_classes(chord_i, tension_level=3, voice_count=3)
     assert len(voiced_triad) == 3
+
+
+def test_chord_dictionary_explicit_symbol_tension_query():
+    assert query_pitch_class_set("I", 3) == [0, 7, 4]
+    assert query_pitch_class_set("I", 7) == [0, 7, 4, 11, 2, 5, 9]
 
 
 def test_harmonic_progression_selector_transitions():
@@ -64,6 +70,43 @@ def test_harmony_agent_seed_state_update():
     state = SeedState(base_seed=50, current_seed=500, rhythm_seed=600)
     changed = ha.update_params(seed_state=state)
     assert changed is True
+
+
+def test_harmony_natural_minor_mode_changes_diatonic_qualities():
+    major = HarmonyAgent(loop_size=4, grain=4, key_root=60, mode="major")
+    minor = HarmonyAgent(loop_size=4, grain=4, key_root=60, mode="minor")
+
+    assert major._progression_selector.dictionary["I"].quality == "major"
+    assert minor._progression_selector.dictionary["I"].quality == "minor"
+    assert minor._progression_selector.dictionary["ii"].quality == "diminished"
+    assert minor._progression_selector.dictionary["iii"].quality == "major"
+    assert minor._progression_selector.dictionary["vi"].quality == "major"
+
+
+def test_harmony_minor_mode_reports_documented_roman_labels():
+    harmony = HarmonyAgent(loop_size=4, grain=4, key_root=60, mode="minor")
+    harmony._current_chord_def = harmony._progression_selector.dictionary["I"]
+    assert harmony.get_roman_numeral() == "i"
+
+    harmony._current_chord_def = harmony._progression_selector.dictionary["ii"]
+    assert harmony.get_roman_numeral() == "ii°"
+
+
+def test_harmony_mode_update_rebuilds_current_chord():
+    harmony = HarmonyAgent(loop_size=4, grain=4, key_root=60, mode="major")
+    assert harmony._current_chord_def.quality == "major"
+
+    assert harmony.update_params(ha_mode="minor") is True
+    assert harmony.mode == "minor"
+    assert harmony._current_chord_def.quality == "minor"
+
+
+def test_harmony_post_filter_with_no_overlap_is_silent():
+    harmony = HarmonyAgent(loop_size=4, grain=4, key_root=60, mode="major")
+    harmony.set_post_filter([1])
+
+    assert harmony.get_chord_pitch_classes() == []
+    assert harmony.process_tick(index=0, pulse_duration=0.1) == []
 
 
 def test_harmony_agent_get_chord_pitch_classes():
@@ -112,6 +155,7 @@ def test_harmony_agent_low_tension_arpeggiator_gating():
     assert ha._should_arpeggiate() is False
 
     # Intermediate tension (e.g. 5.0) activates arpeggiation
+    ha.on_phrase_start()
     ha.update_params(tension=5.0)
     assert ha._should_arpeggiate() is True
 

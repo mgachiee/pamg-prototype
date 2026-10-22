@@ -87,25 +87,28 @@ def test_tcp_telemetry_valence_arousal():
         async with server:
             reader, writer = await asyncio.open_connection("127.0.0.1", 9093)
             try:
-                # Test normalized [-1, 1] range: V=1.0 -> x=1.0, A=-1.0 -> y=0.0
+                # Affective aliases remain diagnostic; direct XY controls
+                # generation state.
                 telemetry_packet = {
                     "action": "telemetry",
                     "valence": 1.0,
                     "arousal": -1.0,
                     "tempo": 128,
                     "seed": 555,
+                    "x": 0.8,
+                    "y": 0.2,
                 }
                 writer.write((json.dumps(telemetry_packet) + "\n").encode("utf-8"))
                 await writer.drain()
 
                 resp = json.loads((await reader.readline()).decode("utf-8"))
                 assert resp["status"] == "ok"
-                assert state.x == 1.0
-                assert state.y == 0.0
+                assert state.x == 0.8
+                assert state.y == 0.2
                 assert state.tempo == 128
                 assert state.base_seed == 555
 
-                # Test centered V=0.0 -> x=0.5, A=0.0 -> y=0.5 (when negative was used)
+                # A second diagnostic packet must not overwrite XY.
                 telemetry_center = {
                     "action": "telemetry",
                     "valence": -0.5,
@@ -116,8 +119,8 @@ def test_tcp_telemetry_valence_arousal():
 
                 resp2 = json.loads((await reader.readline()).decode("utf-8"))
                 assert resp2["status"] == "ok"
-                assert abs(state.x - 0.25) < 1e-4
-                assert abs(state.y - 0.75) < 1e-4
+                assert abs(state.x - 0.8) < 1e-4
+                assert abs(state.y - 0.2) < 1e-4
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -142,8 +145,8 @@ def test_tcp_telemetry_preserves_raw_va_and_key_center():
 
     assert state.raw_valence == -0.5
     assert state.raw_arousal == 0.75
-    assert state.x == 0.25
-    assert state.y == 0.875
+    assert state.x is None
+    assert state.y is None
     assert state.key_center == "F#"
     assert response["key_center"] == "F#"
     assert response["raw_valence"] == -0.5
@@ -383,7 +386,7 @@ def test_tcp_client_disconnect_triggers_silence_non_sidecar():
             await writer.drain()
             resp = json.loads((await reader.readline()).decode("utf-8"))
             assert resp["status"] == "ok"
-            assert state.paused is False
+            assert state.paused is True
 
             # Disconnect client
             writer.close()

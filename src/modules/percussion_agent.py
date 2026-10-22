@@ -58,7 +58,7 @@ class PercussionAgent:
         self.TOM_LOW = 45       # Timpani A
         self.TOM_MID = 48       # Timpani c
         self.TOM_HIGH = 50      # Timpani d
-        self.CYMBAL = 42        # Closed / Suspended Cymbal
+        self.CYMBAL = 49        # Crash Cymbal 1 (orchestral cymbal row)
         self.CRASH = 57         # Concert Cymbal 2
 
         # Baseline parameters (§5.4)
@@ -98,6 +98,7 @@ class PercussionAgent:
         self._pending_phrase_fill = False
         self._last_chord_pool: Optional[int] = None
         self._accent_beats = set()
+        self._moved_list = set()
 
         self.accent_velocity_range = (100, 127)
         self.normal_velocity_range = (60, 95)
@@ -256,6 +257,10 @@ class PercussionAgent:
         """
         self._accent_beats = {int(beat) for beat in accent_beats}
 
+    def notify_moved_list(self, moved_list: List[int]) -> None:
+        """Receive Melody's moved onsets for shared PA accent emphasis."""
+        self._moved_list = {int(index) for index in moved_list}
+
     def notify_chord_change(self, chord_pool: int) -> None:
         """Record chord pool changes to align phrase fills.
 
@@ -343,6 +348,30 @@ class PercussionAgent:
     # Precomputed onset grid and fills
     # ------------------------------------------------------------------
 
+    def _update_velocity_ranges(self) -> None:
+        """Refresh velocity ranges without changing the planned rhythm grid."""
+        base_vel = int(round(self.pa_vel_perc))
+        self.normal_velocity_range = (max(1, base_vel - 15), min(127, base_vel + 10))
+        self.accent_velocity_range = (max(1, base_vel), min(127, base_vel + 20))
+        self.ghost_velocity_range = (
+            max(1, int(round(base_vel * 0.55))),
+            max(1, int(round(base_vel * 0.75))),
+        )
+        self.tom_fill_velocity_range = (
+            max(1, int(round(base_vel * 0.75))),
+            min(127, int(round(base_vel * 1.15))),
+        )
+        self.tom_leadin_velocity_range = (
+            max(1, int(round(base_vel * 0.60))),
+            min(127, int(round(base_vel * 0.90))),
+        )
+
+    def _shift_planned_velocities(self, delta: float) -> None:
+        """Apply a velocity-only change without rebuilding fills or rolls."""
+        for events in self.subfills.values():
+            for event in events:
+                event["velocity"] = max(1, min(127, int(round(event["velocity"] + delta))))
+
     def _plan_loop(self) -> dict:
         """
         Precompute the complete onset grid and fill events for the loop.
@@ -351,13 +380,7 @@ class PercussionAgent:
         total_ticks = self.loop_size * self.grain
         planned_events = {idx: [] for idx in range(total_ticks)}
 
-        # Update velocity ranges based on pa_vel_perc (§4.2 / §5.4)
-        base_vel = int(round(self.pa_vel_perc))
-        self.normal_velocity_range = (max(1, base_vel - 15), min(127, base_vel + 10))
-        self.accent_velocity_range = (max(1, base_vel), min(127, base_vel + 20))
-        self.ghost_velocity_range = (max(1, int(round(base_vel * 0.55))), max(1, int(round(base_vel * 0.75))))
-        self.tom_fill_velocity_range = (max(1, int(round(base_vel * 0.75))), min(127, int(round(base_vel * 1.15))))
-        self.tom_leadin_velocity_range = (max(1, int(round(base_vel * 0.60))), min(127, int(round(base_vel * 0.90))))
+        self._update_velocity_ranges()
 
         # 1. Base groove generation across the Count Loop index grid
         scheduled_snares = set()
@@ -369,7 +392,7 @@ class PercussionAgent:
             )
             # Accent/Beat Follower (§4.1.1, §5.4 pa_acc_beat_p)
             accent_here = (subdivision == 0) and (
-                (beat in self._accent_beats) or (self.rng.random() < self.pa_acc_beat_p)
+                beat in self._accent_beats or self.rng.random() < self.pa_acc_beat_p
             )
 
         ks_delta = self.pa_ks_plus_minus
@@ -392,8 +415,10 @@ class PercussionAgent:
                 self._accent_beat_follower(beat, subdivision)
             )
             # Accent/Beat Follower (§4.1.1, §5.4 pa_acc_beat_p)
-            accent_here = (subdivision == 0) and (
-                (beat in self._accent_beats) or (self.rng.random() < self.pa_acc_beat_p)
+            moved_here = idx in self._moved_list
+            accent_here = moved_here or (
+                subdivision == 0
+                and (beat in self._accent_beats or self.rng.random() < self.pa_acc_beat_p)
             )
 
             # Row 1: Kick
@@ -416,20 +441,6 @@ class PercussionAgent:
                                     is_ratchet=is_ratchet,
                                 )
                             )
-                elif ks_delta > 0 and subdivision != 0:
-                    roll = self.rng.random()
-                    if roll < self.ghost_kick_prob:
-                        planned_events[idx].append(
-                            self._build_midi(
-                                self.KICK,
-                                is_accent=False,
-                                velocity_range=self.ghost_velocity_range,
-                            )
-                        )
-                    elif roll < (self.ghost_kick_prob + ks_delta * 0.4):
-                        planned_events[idx].append(
-                            self._build_midi(self.KICK, is_accent=accent_here)
-                        )
 
             # Row 2: Snare
             if snare_active:
@@ -454,15 +465,6 @@ class PercussionAgent:
                                 ev["duration"] = 0.45
                             planned_events[idx].append(ev)
                             scheduled_snares.add(idx)
-                elif ks_delta > 0 and subdivision != 0:
-                    if self.rng.random() < ks_delta * 0.4:
-                        planned_events[idx].append(
-                            self._build_midi(
-                                snare_note,
-                                is_accent=accent_here,
-                                velocity_range=self.ghost_velocity_range,
-                            )
-                        )
 
             # Row 3: Toms (+/- Toms control §5.4)
             if toms_active:
@@ -553,6 +555,8 @@ class PercussionAgent:
             bool: True if any parameter changed.
         """
         changed = False
+        rebuild_pattern = False
+        previous_velocity = self.pa_vel_perc
 
         def clamp_prob(value: float) -> float:
             return max(0.0, min(1.0, float(value)))
@@ -593,30 +597,36 @@ class PercussionAgent:
             if key == "seed_state" and value is not None:
                 self.rng.seed(int(value.rhythm_seed))
                 changed = True
+                rebuild_pattern = True
                 continue
             if key == "rhythm_seed" and value is not None:
                 self.rng.seed(int(value))
                 changed = True
+                rebuild_pattern = True
                 continue
             if key == "seed" and value is not None:
                 self.rng.seed(int(value))
                 changed = True
+                rebuild_pattern = True
                 continue
             if key == "meter":
                 self.meter = value
                 changed = True
+                rebuild_pattern = True
                 continue
             if key == "loop_size" and value is not None:
                 new_loop = max(1, int(value))
                 if new_loop != self.loop_size:
                     self.loop_size = new_loop
                     changed = True
+                    rebuild_pattern = True
                 continue
             if key == "grain" and value is not None:
                 new_grain = max(1, int(value))
                 if new_grain != self.grain:
                     self.grain = new_grain
                     changed = True
+                    rebuild_pattern = True
                 continue
 
             if key in baseline_float_fields:
@@ -631,11 +641,17 @@ class PercussionAgent:
             if getattr(self, key, None) != new_value:
                 setattr(self, key, new_value)
                 changed = True
+                if key != "pa_vel_perc":
+                    rebuild_pattern = True
 
         if changed:
             self.total_pulses = self.loop_size * self.grain
             self.phrase_length = max(1, int(self.phrase_length))
-            self.add_sub_filling()
+            self._update_velocity_ranges()
+            if rebuild_pattern:
+                self.add_sub_filling()
+            elif self.pa_vel_perc != previous_velocity:
+                self._shift_planned_velocities(self.pa_vel_perc - previous_velocity)
 
         return changed
 

@@ -1,6 +1,6 @@
 """Preset data model for PAMG parameter snapshots."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 @dataclass
@@ -40,6 +40,7 @@ class Preset:
     ha_register_ins: float
     ha_ins_plus_minus: float
     ha_move: float
+    ha_mode: str
 
     # Percussion Agent (PA) - §5.4
     pa_vel_perc: float
@@ -52,3 +53,15 @@ class Preset:
     seeded_phrase_length: float
     shape_depth: float
     shape_length: float
+
+    # Orchestration fields.  Programs and mode are phrase-quantized; weights
+    # are continuously interpolated by the MPIC.
+    oa_melody_programs: List[int] = field(default_factory=lambda: [48, 0, 73, 61])
+    oa_harmony_programs: List[int] = field(default_factory=lambda: [48, 0, 73, 61])
+    oa_harmony_layer_weights: List[float] = field(default_factory=lambda: [1.0, 1.0, 0.8, 0.8])
+    oa_harmony_layer_mode: str = "probabilistic"
+
+    def __post_init__(self) -> None:
+        self.ha_mode = str(self.ha_mode).strip().lower()
+        if self.ha_mode not in {"major", "minor"}:
+            raise ValueError("ha_mode must be 'major' or 'minor'")

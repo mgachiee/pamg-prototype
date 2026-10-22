@@ -38,3 +38,37 @@ def test_interpolator_quantized_state_phrase_boundary():
     assert hasattr(quant, "ma_step")
     assert hasattr(quant, "ha_tension")
     assert hasattr(quant, "pa_vel_perc")
+
+
+def test_interpolator_exposes_orchestration_fields():
+    interp = MultiParameterPresetInterpolator(PRESET_A, PRESET_B, PRESET_C, PRESET_D)
+    state = interp.update(0.5, 0.5, 0.1)
+    assert len(state.oa_harmony_layer_weights) == 4
+    quant = interp.get_quantized_state(phrase_start=True)
+    assert quant.oa_harmony_layer_mode in {"deterministic", "probabilistic"}
+
+
+def test_interpolator_quantizes_harmony_mode_by_corner():
+    interp = MultiParameterPresetInterpolator(PRESET_A, PRESET_B, PRESET_C, PRESET_D, smoothing_time=0.0)
+
+    interp.update(0.0, 0.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(True).ha_mode == "minor"
+
+    interp.update(1.0, 0.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(True).ha_mode == "major"
+
+    interp.update(0.0, 1.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(True).ha_mode == "minor"
+
+    interp.update(1.0, 1.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(True).ha_mode == "major"
+
+
+def test_interpolator_harmony_mode_waits_for_phrase_boundary():
+    interp = MultiParameterPresetInterpolator(PRESET_A, PRESET_B, PRESET_C, PRESET_D, smoothing_time=0.0)
+    interp.update(0.0, 0.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(True).ha_mode == "minor"
+
+    interp.update(1.0, 0.0, pulse_duration=0.1)
+    assert interp.get_quantized_state(False) is None
+    assert interp.get_quantized_state(True).ha_mode == "major"

@@ -36,6 +36,7 @@ from src.core.configs import (
     MAX_ENEMIES,
     INTERPOLATION_SMOOTHING_TIME,
     AUDIO_CONFIG,
+    PERCUSSION_PROGRAM,
 )
 from src.core.routing import RoutingType
 from src.core.midi_io import open_midi_ports, close_midi_ports
@@ -68,6 +69,40 @@ def _preset_label(x: float, y: float) -> str:
         if math.isclose(x, corner_x) and math.isclose(y, corner_y):
             return label
     return "Interpolated"
+
+
+def _is_phrase_start(local_index: int, loop_index: int, grain: int, phrase_length: int) -> bool:
+    """Phrase boundaries are loop boundaries, not beat positions within a loop."""
+    return local_index % grain == 0 and loop_index % max(1, phrase_length) == 0
+
+
+def _apply_continuous_params(
+    melody_agent,
+    harmony_agent,
+    percussion_agent,
+    orchestrator_agent,
+    params,
+) -> None:
+    """Apply interpolated controls that are allowed to change every pulse."""
+    melody_agent.update_params(
+        ma_velocity=float(params.ma_velocity),
+        shape_depth=int(round(params.shape_depth)),
+        shape_length=max(0.25, min(8.0, float(params.shape_length))),
+    )
+    harmony_agent.update_params(
+        tension=float(params.ha_tension),
+        ha_vel_ins=float(params.ha_vel_ins),
+    )
+    percussion_agent.update_params(pa_vel_perc=float(params.pa_vel_perc))
+    orchestrator_agent.update_params(
+        ma_orch_plus_minus=float(params.ma_orch_plus_minus),
+        ha_ins_plus_minus=float(params.ha_ins_plus_minus),
+        ma_orch_range_low=int(round(params.ma_orch_range_low)),
+        ma_orch_range_high=int(round(params.ma_orch_range_high)),
+        ha_range_ins_low=int(round(params.ha_range_ins_low)),
+        ha_range_ins_high=int(round(params.ha_range_ins_high)),
+        harmony_layer_weights=list(params.oa_harmony_layer_weights),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +271,11 @@ async def run_clock(
         grain=grain,
         drunk_mode="dcontour",
     )
-    harmony_agent = HarmonyAgent(loop_size=loop_size, grain=grain)
+    harmony_agent = HarmonyAgent(
+        loop_size=loop_size,
+        grain=grain,
+        mode=PRESET_A.ha_mode,
+    )
     orchestrator_agent = OrchestratorAgent(
         melody_channels=MELODY_CHANNELS,
         harmony_channels=HARMONY_CHANNELS,
@@ -397,6 +436,16 @@ async def run_clock(
 
         await _send_program_changes(mel_queue)
         await _send_cc_changes(mel_queue)
+        # PA owns the direct percussion instrument path; do not route its
+        # program assignment through the Orchestration Agent.
+        if perc_queue is not None:
+            await perc_queue.put(
+                mido.Message(
+                    "program_change",
+                    program=int(PERCUSSION_PROGRAM),
+                    channel=9,
+                )
+            )
 
         # ------------------------------------------------------------------
         # Main clock loop
@@ -523,12 +572,22 @@ async def run_clock(
 
             params = interpolator.update(x, y, pulse_duration)
 
+            # Continuous preset parameters are applied on every pulse. Rhythm
+            # topology and discrete instrument changes remain quantized below.
+            _apply_continuous_params(
+                melody_agent,
+                harmony_agent,
+                percussion_agent,
+                orchestrator_agent,
+                params,
+            )
+
             # Determine phrase boundary to snap discrete parameters.
             phrase_length = max(
                 1,
                 int(round(params.seeded_phrase_length)),
             )
-            phrase_start = subdivision == 0 and (measure_index % phrase_length) == 0
+            phrase_start = _is_phrase_start(local_index, loop_index, grain, phrase_length)
 
             quantized_params = interpolator.get_quantized_state(
                 phrase_start=phrase_start,
@@ -551,9 +610,8 @@ async def run_clock(
                     ma_plus_minus_notes=float(params.ma_plus_minus_notes),
                     ma_mv_even=float(params.ma_mv_even),
                     ma_mv_odd=float(params.ma_mv_odd),
-                    ma_trans=int(round(params.ma_trans)),
                     shape_depth=int(round(params.shape_depth)),
-                    shape_length=int(round(params.shape_length)),
+                    shape_length=max(0.25, min(8.0, float(params.shape_length))),
                 )
 
                 orchestrator_agent.update_params(
@@ -564,6 +622,9 @@ async def run_clock(
                     ma_orch_range_high=int(round(params.ma_orch_range_high)),
                     ha_range_ins_low=int(round(params.ha_range_ins_low)),
                     ha_range_ins_high=int(round(params.ha_range_ins_high)),
+                    harmony_layer_mode=last_discrete_params.oa_harmony_layer_mode,
+                    melody_programs=list(last_discrete_params.oa_melody_programs),
+                    harmony_programs=list(last_discrete_params.oa_harmony_programs),
                 )
 
                 percussion_agent.update_params(
@@ -577,33 +638,39 @@ async def run_clock(
 
                 harmony_agent.update_params(
                     tension=float(params.ha_tension),
+                    ha_mode=last_discrete_params.ha_mode,
                     complexity_progression=float(params.ha_cpx_prog),
                     voice_count=max(1, int(round(params.ha_voice_ins))),
                     accent_probability=float(params.ha_acc_beat),
+                    ha_move=float(params.ha_move),
                     add_probability=max(0.0, float(params.ha_plus_minus_notes)) if params.ha_plus_minus_notes > 0 else 0.0,
                     sub_probability=max(0.0, -float(params.ha_plus_minus_notes)) if params.ha_plus_minus_notes < 0 else 0.0,
                     ha_vel_ins=float(params.ha_vel_ins),
                 )
+
+            if phrase_start:
+                melody_agent.update_params(ma_trans=int(round(params.ma_trans)))
 
             # ------------------------------------------------------------------
             # Phrase and loop boundary hooks
             # ------------------------------------------------------------------
             if phrase_start:
                 melody_agent.on_phrase_start()
+                harmony_agent.on_phrase_start()
                 orchestrator_agent.on_phrase_start()
 
             if local_index == 0:
                 melody_agent.on_loop_start(loop_index)
-                percussion_agent.on_loop_start(loop_index)
                 accent_list = melody_agent.get_accent_list()
                 harmony_agent.notify_accents(accent_list)
+                harmony_agent.notify_moved_list(melody_agent.get_moved_list())
                 percussion_agent.notify_accents(accent_list)
+                percussion_agent.notify_moved_list(melody_agent.get_moved_list())
+                percussion_agent.on_loop_start(loop_index)
 
             if phrase_start:
                 await _send_program_changes(mel_queue)
-                await _send_cc_changes(mel_queue)
-            elif subdivision == 0:
-                await _send_cc_changes(mel_queue)
+            await _send_cc_changes(mel_queue)
 
             # ------------------------------------------------------------------
             # Chord + seed updates
@@ -612,37 +679,40 @@ async def run_clock(
                 measure_index=measure_index,
             )
 
-            # On downbeat, update seed and log chord changes.
+            # Deterministic seeds change only on Pool 1 re-entry. Zero-seed
+            # improvisation intentionally samples on every clock tick.
             if subdivision == 0:
                 logger.info(
                     f"Measure {measure_index + 1}/{loop_size} - Chord: {harmony_agent.get_roman_numeral()} "
                     f"{current_chord} (Pool {harmony_agent.get_chord_pool()})",
                 )
 
+            new_seed_state = _spg_prev_seed
+            if spg.base_seed == 0 or subdivision == 0:
                 new_seed_state = spg.process_chord_change(
                     harmony_agent.get_chord_pool(),
                     phrase_length,
                 )
-                if new_seed_state != _spg_prev_seed:
-                    melody_agent.update_params(
-                        seed=new_seed_state.current_seed,
-                        rhythm_seed=new_seed_state.rhythm_seed,
-                        seed_state=new_seed_state,
-                    )
-                    percussion_agent.update_params(
-                        seed=new_seed_state.current_seed,
-                        rhythm_seed=new_seed_state.rhythm_seed,
-                        seed_state=new_seed_state,
-                    )
-                    harmony_agent.update_params(
-                        seed=new_seed_state.current_seed,
-                        rhythm_seed=new_seed_state.rhythm_seed,
-                        seed_state=new_seed_state,
-                    )
-                    orchestrator_agent.update_params(
-                        seed=new_seed_state.current_seed,
-                    )
-                    _spg_prev_seed = new_seed_state
+            if new_seed_state != _spg_prev_seed:
+                melody_agent.update_params(
+                    seed=new_seed_state.current_seed,
+                    rhythm_seed=new_seed_state.rhythm_seed,
+                    seed_state=new_seed_state,
+                )
+                percussion_agent.update_params(
+                    seed=new_seed_state.current_seed,
+                    rhythm_seed=new_seed_state.rhythm_seed,
+                    seed_state=new_seed_state,
+                )
+                harmony_agent.update_params(
+                    seed=new_seed_state.current_seed,
+                    rhythm_seed=new_seed_state.rhythm_seed,
+                    seed_state=new_seed_state,
+                )
+                orchestrator_agent.update_params(
+                    seed=new_seed_state.current_seed,
+                )
+                _spg_prev_seed = new_seed_state
 
             # Handle chord pool transitions for percussion fills.
             current_chord_pool = harmony_agent.get_chord_pool()
@@ -656,7 +726,7 @@ async def run_clock(
             try:
                 drum_hits = percussion_agent.process_tick(index=local_index)
             except Exception as e:
-                logger.debug(f"Percussion tick error: {e}")
+                logger.exception(f"Percussion tick error: {e}")
                 drum_hits = []
 
             try:
@@ -665,7 +735,7 @@ async def run_clock(
                     pulse_duration=pulse_duration,
                 )
             except Exception as e:
-                logger.debug(f"Harmony tick error: {e}")
+                logger.exception(f"Harmony tick error: {e}")
                 harmony_hits = []
 
             try:
@@ -676,7 +746,7 @@ async def run_clock(
                     current_chord_pcs=harmony_agent.get_chord_pitch_classes(),
                 )
             except Exception as e:
-                logger.debug(f"Melody tick error: {e}")
+                logger.exception(f"Melody tick error: {e}")
                 melody_hits = []
 
             try:
@@ -685,7 +755,7 @@ async def run_clock(
                     harmony_hits,
                 )
             except Exception as e:
-                logger.debug(f"Orchestration tick error: {e}")
+                logger.exception(f"Orchestration tick error: {e}")
                 orchestrated_hits = []
 
             # ------------------------------------------------------------------

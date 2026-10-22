@@ -250,6 +250,24 @@ Structurally identical to MA: `3.1.1 Accent/Beat Follower`, `3.1.2 Add/Sub Filli
 | `Stacc/Legato` | `[SPEC]` | `3.1.3`, same algorithm as MA |
 | `Move` | `[INFER]` | Likely the HA-side "Moved List" concept shared from rhythm generation; not separately named |
 
+### 4.6 Project Harmony mode mapping
+
+The demonstration UI exposes a Harmony Major/Minor control `[DEMO]`. This
+project maps that discrete control through the four XY presets: Presets A and
+C use `minor`, while Presets B and D use `major`. Mode changes are applied at
+phrase boundaries, like other discrete preset values.
+
+The project uses natural minor for `minor` mode: i minor, ii° diminished, III
+major, iv minor, v minor, VI major, and VII major. This is an implementation
+choice because the written PAMG sources do not specify the minor-mode scale
+formula.
+
+The current implementation also uses two local rules where the source is
+underspecified: phrase segmentation gates arpeggiation and tension levels
+4–10.5 select arpeggiation inside that window; the local arpeggio denominator
+is `4 × grain`. A post-filter is authoritative: if it matches no active pitch
+classes, Harmony emits no pitches or events.
+
 ---
 
 ## 5. Percussion Agent (PA) — §4.x
@@ -367,6 +385,7 @@ Items not resolved by S1/S2's written text and not independently verified by the
 | 3 | Staccato/legato onset-distance threshold value | Not specified in either source, §3.2 |
 | 4 | Design rationale for PA bypassing OA | Confirmed as architecture (§1, §5.3), rationale undiscussed in either source |
 | 5 | `Vel ins`, `Range ins`, `trans`, `Move` parameter mappings | `[INFER]` only — plausible but unconfirmed against source text, §3.5/§4.5 |
+| 6 | Mapping clock `grain` to an arpeggio note-rate denominator | The 1/32 solo-Piano restriction is specified, but the source does not define the runtime conversion from `grain`; the implementation uses `4 × grain` as a local inference |
 
 ---
 

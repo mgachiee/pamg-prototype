@@ -5,8 +5,15 @@ The single source of truth for the system's intended behavior, UI architecture, 
 1. `pamg_gui.py`
 2. `docs/technical-reference.md`
 3. `docs/implementation-audit.md` (for auditing required fixes)
+4. `docs/pa-observations.md` (owner-provided evidence for demo-observed Percussion Agent behavior)
+5. `docs/tcp-contract.md` (TCP integration contract)
 
-Any functions, logic, or architectural extensions currently in the codebase that deviate from these three sources (such as those formerly listed in `custom_implementations.md`) must be removed to ensure strict compliance with the original research model.
+Any functions, logic, or architectural extensions currently in the codebase that
+deviate from these sources (such as those formerly listed in
+`custom_implementations.md`) must be removed or isolated to ensure strict
+compliance with the original research model. PA behavior documented in
+`pa-observations.md` is owner-provided demo evidence and is preserved when it
+does not violate the documented PA routing invariant.
 
 ## Goal
 The primary objective of this project is to integrate a TCP Socket Server into the Progressive-Adaptive Music Generator (PAMG) architecture. This server will listen for real-time game state variables sent from a game engine, and use them to drive the real-time music generation. 

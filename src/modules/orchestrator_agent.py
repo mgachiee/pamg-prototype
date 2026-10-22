@@ -86,7 +86,7 @@ class OrchestratorAgent:
             harmony_programs,
         )
         self.percussion_program = self._clamp_program(percussion_program)
-        self.harmony_layer_mode = "deterministic"
+        self.harmony_layer_mode = self._normalize_layer_mode(harmony_layer_mode)
         self._harmony_layer_mask: Optional[List[bool]] = None
         self._channel_families: Dict[int, str] = {}
         self._family_ranges: Dict[str, Tuple[int, int]] = {}
@@ -100,6 +100,7 @@ class OrchestratorAgent:
         self._last_melody_program: Optional[int] = None
         self._last_melody_pairs: List[Tuple[int, int]] = []
         self._last_harmony_pairs: List[Tuple[int, int]] = []
+        self._last_harmony_cc_values: Dict[int, int] = {}
         self._last_percussion_program: Optional[int] = None
         self._queue_program_changes(force=True)
         self._queue_cc_changes(force=True)
@@ -215,6 +216,16 @@ class OrchestratorAgent:
 
             for event in harmony_events:
                 for channel in active_harm_channels:
+                    family = self._channel_families.get(channel)
+                    if event.get("is_arpeggio") and family == "brass":
+                        # Baseline idiomatic restriction: brass avoids
+                        # arpeggiated figures.
+                        continue
+                    if event.get("arpeggio_rate_denominator", 0) >= 32 and (
+                        family != "keys" or len(active_harm_channels) != 1
+                    ):
+                        # Only solo Piano may use the documented 1/32 rate.
+                        continue
                     orig_idx = (
                         self.harmony_channels.index(channel)
                         if channel in self.harmony_channels
@@ -227,7 +238,10 @@ class OrchestratorAgent:
                         if orig_idx < len(self.harmony_layer_weights)
                         else 1.0
                     )
-                    if weight < 0.5:
+                    if self.harmony_layer_mode == "probabilistic":
+                        if self._rng.random() >= weight:
+                            continue
+                    elif weight < 0.5:
                         continue
                     merged.append(
                         self._prepare_event(
@@ -382,7 +396,10 @@ class OrchestratorAgent:
                 changed = True
 
         if "harmony_layer_mode" in kwargs:
-            pass  # Retained as no-op for backward compatibility (deterministic only)
+            new_mode = self._normalize_layer_mode(kwargs["harmony_layer_mode"])
+            if new_mode != self.harmony_layer_mode:
+                self.harmony_layer_mode = new_mode
+                changed = True
 
         if "harmony_layer_mask" in kwargs:
             new_mask = self._normalize_layer_mask(kwargs["harmony_layer_mask"])
@@ -465,7 +482,10 @@ class OrchestratorAgent:
         for idx, channel in enumerate(self.harmony_channels):
             weight = self.harmony_layer_weights[idx] if idx < len(self.harmony_layer_weights) else 1.0
             val = max(0, min(127, int(round(weight * 127))))
-            self._pending_cc_changes.append((int(channel), 11, val))
+            channel = int(channel)
+            if force or self._last_harmony_cc_values.get(channel) != val:
+                self._pending_cc_changes.append((channel, 11, val))
+                self._last_harmony_cc_values[channel] = val
 
     def consume_cc_changes(self) -> List[Tuple[int, int, int]]:
         """Return and clear pending CC changes as (channel, control, value) tuples."""
@@ -622,10 +642,9 @@ class OrchestratorAgent:
             self._pending_program_changes.extend(harmony_pairs)
             self._last_harmony_pairs = list(harmony_pairs)
 
-        # Percussion Program Change (Channel 9 - General MIDI Orchestra Kit)
-        if force or self.percussion_program != self._last_percussion_program:
-            self._pending_program_changes.append((9, self.percussion_program))
-            self._last_percussion_program = self.percussion_program
+        # Percussion bypasses the Orchestration Agent in the PAMG baseline.
+        # PA owns its own direct instrument path; retain this constructor field
+        # only for compatibility with existing callers.
 
 
     def _build_harmony_program_pairs(self) -> List[Tuple[int, int]]:

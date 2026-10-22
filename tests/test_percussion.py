@@ -62,6 +62,18 @@ def test_percussion_baseline_voices_only():
 
     assert all_emitted_notes.issubset(allowed_notes)
     assert len(all_emitted_notes.intersection(forbidden_notes)) == 0
+    assert 42 not in all_emitted_notes  # GM 42 is closed hi-hat, not the orchestral cymbal row
+
+
+def test_percussion_high_energy_keeps_kick_and_snare_on_template_beats():
+    """Positive KS increases intensity without adding a pop/rock backbeat grid."""
+    pa = PercussionAgent(loop_size=4, grain=4, seed=42)
+    pa.update_params(pa_ks_plus_minus=0.8, pa_toms_plus_minus=0.8, pa_cymb_plus_minus=0.8)
+
+    for tick in range(16):
+        for event in pa.process_tick(tick):
+            if event["note"] in (pa.KICK, pa.SNARE):
+                assert tick % pa.grain == 0
 
 
 def test_percussion_snare_articulation_by_velocity():
@@ -95,6 +107,35 @@ def test_percussion_velocity_ranges_scale_with_param():
     pa.update_params(pa_vel_perc=110.0)
     assert pa.ghost_velocity_range[1] >= 70
     assert pa.tom_fill_velocity_range[0] >= 75
+
+
+def test_percussion_velocity_update_preserves_planned_fills():
+    pa = PercussionAgent(loop_size=4, grain=4, seed=42)
+    planned = pa.subfills
+    before = [event["velocity"] for events in planned.values() for event in events]
+
+    pa.update_params(pa_vel_perc=70.0)
+    after = [event["velocity"] for events in pa.subfills.values() for event in events]
+
+    assert pa.subfills is planned
+    assert pa.normal_velocity_range[0] == 55
+    assert before != after
+
+
+def test_percussion_receives_melody_moved_list_for_accent_following():
+    plain = PercussionAgent(loop_size=4, grain=4, seed=42)
+    plain.update_params(pa_acc_beat_p=0.0)
+    plain.on_loop_start(0)
+    plain_event = plain.process_tick(8)[0]
+
+    pa = PercussionAgent(loop_size=4, grain=4, seed=42)
+    pa.update_params(pa_acc_beat_p=0.0)
+    pa.notify_moved_list([8])
+    pa.on_loop_start(0)
+    moved_event = pa.process_tick(8)[0]
+
+    assert pa._moved_list == {8}
+    assert moved_event["velocity"] > plain_event["velocity"]
 
 
 def test_percussion_calm_preset_row_gating():
@@ -151,7 +192,7 @@ def test_percussion_dynamic_contrast_across_presets():
     assert 1 <= hits_a <= 15  # Preset A: Somber / Ambient has subtle, sparse orchestral color
     assert 3 <= hits_b <= 25  # Preset B: Calm / Sanctuary has gentle downbeats and side-stick
     assert hits_c >= 50  # Preset C: Danger / Combat has high drum activity
-    assert hits_d >= 40  # Preset D: Action / Heroic has driving drum activity
+    assert hits_d >= 30  # Preset D: Action / Heroic has driving orchestral activity
     assert hits_c > hits_a * 4
 
 

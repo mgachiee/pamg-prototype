@@ -16,6 +16,12 @@ def test_melody_lookahead():
     assert len(ahead_boundary) == 4
 
 
+def test_melody_tacet_suppresses_events():
+    ma = MelodyAgent(movement=MelodyAgent.movement_type.odd, loop_size=4, grain=4, seed=100)
+    ma.update_params(ma_tac=1.0)
+    assert ma.process_tick(index=0, current_chord=[60], pulse_duration=0.1) == []
+
+
 def test_melody_articulation_duration():
     ma = MelodyAgent(movement=MelodyAgent.movement_type.odd, loop_size=4, grain=4, seed=42)
     # Set known onset indices
@@ -37,6 +43,15 @@ def test_melody_seed_state_dual_rng():
     val_pitch = ma._pitch_rng.random()
     val_rhythm = ma._rhythm_rng.random()
     assert val_pitch != val_rhythm
+
+
+def test_melody_shape_length_uses_documented_quarter_to_eight_loop_range():
+    melody = MelodyAgent(movement=MelodyAgent.movement_type.odd, loop_size=4, grain=4)
+    melody.update_params(shape_length=0.1)
+    assert melody.shape_length == 0.25
+
+    melody.update_params(shape_length=9.0)
+    assert melody.shape_length == 8.0
 
 
 def test_melody_process_tick_emits_valid_events():

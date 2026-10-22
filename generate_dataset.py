@@ -2,6 +2,8 @@ import os
 import random
 import mido
 import math
+import argparse
+import json
 from typing import Dict, List, Tuple
 
 from src.core.configs import *
@@ -11,9 +13,9 @@ from src.modules.harmony_agent import HarmonyAgent
 from src.modules.orchestrator_agent import OrchestratorAgent
 from src.core.seeded_phrase_generator import SeededPhraseGenerator
 from src.core.midi_events import normalize_event
+from src.core.clock import _is_phrase_start
 
-def generate_dataset():
-    output_dir = "dataset"
+def generate_dataset(shared_samples=None, output_dir="dataset", duration_sec=120.0):
     os.makedirs(output_dir, exist_ok=True)
     
     presets = {
@@ -22,27 +24,45 @@ def generate_dataset():
         "C": PRESET_C,
         "D": PRESET_D
     }
+
+    shared_by_name = {}
+    if shared_samples is not None:
+        quadrant_presets = {1: "D", 2: "C", 3: "A", 4: "B"}
+        shared_presets = {}
+        for sample in shared_samples:
+            iteration = int(sample["iteration"])
+            quadrant = int(sample["quadrant"])
+            preset_name = f"Shared_{iteration:04d}"
+            shared_presets[preset_name] = presets[quadrant_presets[quadrant]]
+            shared_by_name[preset_name] = sample
+        presets = shared_presets
     
     # ------------------------------------------------------------------
     # Configuration
     # ------------------------------------------------------------------
     grain = 4
     loop_size = 4
-    target_duration_sec = 120.0  # 2 minutes
+    target_duration_sec = float(duration_sec)
     ticks_per_beat = 480
     ticks_per_pulse = ticks_per_beat // grain  # 16th note = 120 ticks at grain 4
     
     for preset_name, preset in presets.items():
-        print(f"Generating 25 files for Preset {preset_name} (Quadrant Mapping)...")
+        if shared_samples is None:
+            print(f"Generating 25 files for Preset {preset_name} (Quadrant Mapping)...")
         
-        for file_idx in range(1, 26):
-            # 1. Randomize BPM based on preset tension/energy
-            if preset_name in ("B", "D"): # High Energy / High Arousal
-                bpm = random.randint(110, 150)
-            else: # Low Energy / Calm / Sad
-                bpm = random.randint(80, 105)
-            
-            base_seed = random.randint(1, 999999)
+        for file_idx in range(1, 26 if shared_samples is None else 2):
+            sample = shared_by_name.get(preset_name)
+            if sample is not None:
+                bpm = int(sample.get("tempo", 120))
+                base_seed = int(sample["seed"])
+                random.seed(base_seed)
+            else:
+                # 1. Randomize BPM based on preset tension/energy
+                if preset_name in ("B", "D"): # High Energy / High Arousal
+                    bpm = random.randint(110, 150)
+                else: # Low Energy / Calm / Sad
+                    bpm = random.randint(80, 105)
+                base_seed = random.randint(1, 999999)
             
             # Calculate required loops for 2 minutes
             seconds_per_loop = (60.0 / bpm) * loop_size
@@ -52,12 +72,18 @@ def generate_dataset():
             pulse_duration_sec = 60.0 / (bpm * grain)
             
             # 2. Initialize Agent Network
-            percussion_agent = PercussionAgent(loop_size=loop_size, grain=grain)
-            melody_agent = MelodyAgent(movement="odd", loop_size=loop_size, grain=grain)
-            harmony_agent = HarmonyAgent(loop_size=loop_size, grain=grain)
+            percussion_agent = PercussionAgent(loop_size=loop_size, grain=grain, seed=base_seed)
+            melody_agent = MelodyAgent(movement="odd", loop_size=loop_size, grain=grain, seed=base_seed)
+            harmony_agent = HarmonyAgent(
+                loop_size=loop_size,
+                grain=grain,
+                seed=base_seed,
+                mode=preset.ha_mode,
+            )
             
             # Orchestral Instrumentation (GM Mapping)
             orchestrator_agent = OrchestratorAgent(
+                seed=base_seed,
                 melody_channels=[0, 1],       # Ch 1 (Violin), Ch 2 (Flute)
                 harmony_channels=[2, 3, 4],    # Ch 3 (Piano), Ch 4 (Strings), Ch 5 (Bass)
                 harmony_layer_weights=[1.0, 1.0, 1.0], 
@@ -80,7 +106,7 @@ def generate_dataset():
             )
             
             spg = SeededPhraseGenerator(base_seed=base_seed)
-            _spg_prev_seed = spg.current_seed
+            _spg_prev_seed = spg.seed_state
             last_chord_pool = harmony_agent.get_chord_pool()
             
             # Event collection (channel -> List[absolute_tick, message])
@@ -103,7 +129,7 @@ def generate_dataset():
                 measure_index = beat_index % loop_size
                 subdivision = local_index % grain
                 
-                phrase_start = subdivision == 0 and (measure_index % phrase_length) == 0
+                phrase_start = _is_phrase_start(local_index, loop_index, grain, phrase_length)
                 
                 # Update agent parameters at phrase boundaries
                 if tick == 0 or phrase_start:
@@ -118,7 +144,7 @@ def generate_dataset():
                         ma_mv_odd=float(preset.ma_mv_odd),
                         ma_trans=int(round(preset.ma_trans)),
                         shape_depth=int(round(preset.shape_depth)),
-                        shape_length=int(round(preset.shape_length)),
+                        shape_length=max(0.25, min(8.0, float(preset.shape_length))),
                     )
                     orchestrator_agent.update_params(
                         ma_orch_plus_minus=float(preset.ma_orch_plus_minus),
@@ -141,30 +167,47 @@ def generate_dataset():
                         complexity_progression=float(preset.ha_cpx_prog),
                         voice_count=max(1, int(round(preset.ha_voice_ins))),
                         accent_probability=float(preset.ha_acc_beat),
+                        ha_mode=preset.ha_mode,
                         add_probability=max(0.0, float(preset.ha_plus_minus_notes)) if preset.ha_plus_minus_notes > 0 else 0.1,
                         sub_probability=max(0.0, -float(preset.ha_plus_minus_notes)) if preset.ha_plus_minus_notes < 0 else 0.1,
                     )
                 
                 if phrase_start:
                     melody_agent.on_phrase_start()
+                    harmony_agent.on_phrase_start()
                     orchestrator_agent.on_phrase_start()
                     
                 if local_index == 0:
                     melody_agent.on_loop_start(loop_index)
-                    percussion_agent.on_loop_start(loop_index)
                     accent_list = melody_agent.get_accent_list()
                     harmony_agent.notify_accents(accent_list)
+                    harmony_agent.notify_moved_list(melody_agent.get_moved_list())
                     percussion_agent.notify_accents(accent_list)
+                    percussion_agent.notify_moved_list(melody_agent.get_moved_list())
+                    percussion_agent.on_loop_start(loop_index)
                 
                 # Chord and Seed logic
                 current_chord = harmony_agent.get_current_chord(measure_index=measure_index)
-                if subdivision == 0:
-                    new_seed = spg.process_chord_change(harmony_agent.get_chord_pool(), phrase_length)
-                    if new_seed != _spg_prev_seed:
-                        melody_agent.update_params(seed=new_seed)
-                        percussion_agent.update_params(seed=new_seed)
-                        harmony_agent.update_params(seed=new_seed)
-                        _spg_prev_seed = new_seed
+                new_seed_state = _spg_prev_seed
+                if spg.base_seed == 0 or subdivision == 0:
+                    new_seed_state = spg.process_chord_change(
+                        harmony_agent.get_chord_pool(),
+                        phrase_length,
+                    )
+                if new_seed_state != _spg_prev_seed:
+                    melody_agent.update_params(
+                        seed=new_seed_state.current_seed,
+                        rhythm_seed=new_seed_state.rhythm_seed,
+                        seed_state=new_seed_state,
+                    )
+                    percussion_agent.update_params(
+                        seed=new_seed_state.current_seed,
+                        rhythm_seed=new_seed_state.rhythm_seed,
+                        seed_state=new_seed_state,
+                    )
+                    harmony_agent.update_params(seed_state=new_seed_state)
+                    orchestrator_agent.update_params(seed=new_seed_state.current_seed)
+                    _spg_prev_seed = new_seed_state
                         
                 current_chord_pool = harmony_agent.get_chord_pool()
                 if current_chord_pool != last_chord_pool:
@@ -235,10 +278,25 @@ def generate_dataset():
                     track.append(msg)
                     last_t = abs_t
             
-            filename = f"Preset_{preset_name}_{file_idx:02d}.mid"
+            filename = (
+                sample.get("filename")
+                or f"iteration_{sample['iteration']:04d}_seed_{base_seed}_"
+                f"va_{sample['valence']:.2f}_{sample['arousal']:.2f}.mid"
+                if sample is not None else f"Preset_{preset_name}_{file_idx:02d}.mid"
+            )
             mid.save(os.path.join(output_dir, filename))
             
-    print(f"\nSuccessfully generated 100 MIDI files in the '{output_dir}/' directory.")
+    generated_count = len(shared_samples) if shared_samples is not None else 100
+    print(f"\nSuccessfully generated {generated_count} MIDI files in the '{output_dir}/' directory.")
 
 if __name__ == "__main__":
-    generate_dataset()
+    parser = argparse.ArgumentParser(description="Generate PAMG MIDI samples.")
+    parser.add_argument("--shared-json", type=str)
+    parser.add_argument("--output-dir", type=str, default="dataset")
+    parser.add_argument("--duration", type=float, default=120.0)
+    args = parser.parse_args()
+    shared_samples = None
+    if args.shared_json:
+        with open(args.shared_json, encoding="utf-8") as handle:
+            shared_samples = json.load(handle)
+    generate_dataset(shared_samples, output_dir=args.output_dir, duration_sec=args.duration)

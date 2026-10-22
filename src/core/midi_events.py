@@ -51,13 +51,19 @@ def normalize_event(
     velocity = max(1, min(127, velocity))
 
     # Duration defaults to the caller-provided value and must be positive.
+    try:
+        fallback_duration = float(default_duration)
+    except (TypeError, ValueError):
+        fallback_duration = 0.001
+    if not math.isfinite(fallback_duration) or fallback_duration <= 0:
+        fallback_duration = 0.001
     duration = hit.get("duration", default_duration)
     try:
         duration = float(duration)
-        if duration <= 0 or math.isnan(duration):
-            duration = default_duration
+        if not math.isfinite(duration) or duration <= 0:
+            duration = fallback_duration
     except (TypeError, ValueError):
-        duration = default_duration
+        duration = fallback_duration
 
     # Channel defaults to the provided channel and is clamped into [0, 15].
     channel = hit.get("channel", default_channel)

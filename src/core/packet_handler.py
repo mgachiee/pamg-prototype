@@ -71,7 +71,9 @@ class PacketHandler:
         Ingest telemetry updates: valence, arousal, macro_state (time signature, bpm),
         tempo, seed, or direct coordinates.
         """
-        # 1. Valence / Arousal -> XY Pad mapping
+        # 1. Valence / Arousal are retained as diagnostic telemetry.  The
+        # documented generation controls are direct XY coordinates; affective
+        # aliases must not silently change musical state.
         valence = packet.get("valence")
         arousal = packet.get("arousal")
         if valence is not None or arousal is not None:
@@ -83,7 +85,7 @@ class PacketHandler:
             default_a = self.state.raw_arousal if self.state.raw_arousal is not None else 0.5
             v = valence if valence is not None else default_v
             a = arousal if arousal is not None else default_a
-            self.state.set_valence_arousal(v, a)
+            # Do not map diagnostic values into generation coordinates.
 
         # Direct x / y overrides
         if "x" in packet and packet["x"] is not None:
@@ -157,8 +159,7 @@ class PacketHandler:
         if structure_changed:
             self.state.structure_dirty = True
 
-        # Telemetry unpauses the engine if paused
-        self.state.paused = False
+        self.state.paused = False  # Telemetry implies active gameplay
 
         return {
             "status": "ok",
@@ -295,9 +296,6 @@ class PacketHandler:
 
         if structure_changed:
             self.state.structure_dirty = True
-
-        # Flat telemetry unpauses the engine if paused
-        self.state.paused = False
 
         return {
             "status": "ok",

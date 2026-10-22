@@ -23,7 +23,7 @@ class SeededPhraseGenerator:
 
     Improvisation mode (base_seed == 0)
     ------------------------------------
-    Seeds are drawn from os-level entropy on every chord change, producing
+    Seeds are drawn from os-level entropy on every clock tick, producing
     spontaneous, non-repeating musical variations independent of any base seed
     or phrase length. Suitable for live performance contexts.
 
@@ -46,6 +46,9 @@ class SeededPhraseGenerator:
         )
 
         self._improvisation_mode = self.base_seed == 0
+        # The documented gate is re-entry into Chord Pool 1, not continued
+        # residence in Pool 1.  None means that no pool has been observed yet.
+        self._previous_chord_pool = None
 
         if self._improvisation_mode:
             self._system_rng = random.SystemRandom()
@@ -67,6 +70,9 @@ class SeededPhraseGenerator:
     ) -> SeedState:
         """
         Evaluate whether a new seed should be issued and return the active SeedState.
+
+        Deterministic mode uses the chord-pool transition gate. Improvisation
+        mode ignores that gate and changes on every call.
         """
         safe_phrase_length = max(1, int(phrase_length))
 
@@ -90,9 +96,18 @@ class SeededPhraseGenerator:
         # ------------------------------------------------------------------
         # Branch 2 — Deterministic mode, Chord Pool == 1
         # ------------------------------------------------------------------
-        if current_chord_pool == 1:
-            random_offset = self._rng.randint(1, 1000) * safe_phrase_length
-            rhythm_offset = self._rhythm_rng.randint(1, 1000) * safe_phrase_length
+        entered_pool_1 = (
+            int(current_chord_pool) == 1
+            and self._previous_chord_pool is not None
+            and self._previous_chord_pool != 1
+        )
+        self._previous_chord_pool = int(current_chord_pool)
+
+        if entered_pool_1:
+            # §7.1 defines the new value as a seeded random draw bounded by
+            # the configured phrase length, then added to the base seed.
+            random_offset = self._rng.randrange(safe_phrase_length)
+            rhythm_offset = self._rhythm_rng.randrange(safe_phrase_length)
             self.current_seed = self.base_seed + random_offset
             self.rhythm_seed = self.base_seed + rhythm_offset
 

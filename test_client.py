@@ -107,10 +107,15 @@ def query_status(sock: socket.socket) -> Dict[str, Any]:
 
 def build_telemetry_payload(phase: Dict[str, Any]) -> Dict[str, Any]:
     """Construct a telemetry packet matching the specified PAMG phase."""
+    # VA remains compatibility telemetry; XY is the documented preset input.
+    x = (max(-1.0, min(1.0, phase["valence"])) + 1.0) / 2.0
+    y = (max(-1.0, min(1.0, phase["arousal"])) + 1.0) / 2.0
     return {
         "action": "telemetry",
         "valence": phase["valence"],
         "arousal": phase["arousal"],
+        "x": x,
+        "y": y,
         "macro_state": {
             "music_config": {
                 "time_signature": phase["time_signature"],
@@ -194,7 +199,14 @@ def run_automated_flow(
 
         current_measure = handshake_resp.get("measure", 0)
 
-        # 2. Iterate through the 4 Quadrant Phases
+        # Handshake resets the server to standby; telemetry never resumes it.
+        print("\n2. Resume Playback...")
+        resume_resp = send_packet(sock, {"action": "resume"})
+        print(f"   Resume Response: {resume_resp}")
+        if resume_resp.get("status") != "resumed":
+            raise RuntimeError(f"Server did not resume playback: {resume_resp}")
+
+        # 3. Iterate through the 4 Quadrant Phases
         for i, phase in enumerate(PAMG_PHASES, 1):
             print("\n" + "-" * 80)
             print(f">>> DISPATCHING {phase['phase_name']}")
@@ -298,7 +310,16 @@ def run_interactive_mode(host: str, port: int) -> None:
                 }
                 if p in mapping:
                     v, a = mapping[p]
-                    resp = send_packet(sock, {"action": "telemetry", "valence": v, "arousal": a})
+                    resp = send_packet(
+                        sock,
+                        {
+                            "action": "telemetry",
+                            "valence": v,
+                            "arousal": a,
+                            "x": (v + 1.0) / 2.0,
+                            "y": (a + 1.0) / 2.0,
+                        },
+                    )
                     print(f"Jumped to Preset {p}: {resp}")
                 else:
                     print("Unknown preset. Choose from A, B, C, D.")
@@ -307,7 +328,16 @@ def run_interactive_mode(host: str, port: int) -> None:
                 a_idx = parts.index("a")
                 val_v = float(parts[v_idx + 1])
                 val_a = float(parts[a_idx + 1])
-                resp = send_packet(sock, {"action": "telemetry", "valence": val_v, "arousal": val_a})
+                resp = send_packet(
+                    sock,
+                    {
+                        "action": "telemetry",
+                        "valence": val_v,
+                        "arousal": val_a,
+                        "x": (max(-1.0, min(1.0, val_v)) + 1.0) / 2.0,
+                        "y": (max(-1.0, min(1.0, val_a)) + 1.0) / 2.0,
+                    },
+                )
                 print(f"Response: {resp}")
             else:
                 # Try raw JSON

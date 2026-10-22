@@ -94,6 +94,7 @@ class MelodyAgent:
 
         self.drunk_mode = self._normalize_drunk_mode(drunk_mode)
         self.non_repeat = True  # Baseline GUI Non-Repeat toggle (§3.3)
+        self.ma_tac = 0.0
         self._contour_direction = 1
         self._contour_steps_remaining = 0
         self._contour_min_steps = 3
@@ -361,7 +362,7 @@ class MelodyAgent:
             return
 
         if self._shape_steps_remaining <= 0:
-            self._shape_steps_remaining = max(1, int(self.shape_length))
+            self._shape_steps_remaining = max(0.25, float(self.shape_length))
             self._shape_direction = self._rng.choice([-1, 1])
 
         step = self._rng.randint(0, max(1, int(self.shape_depth)))
@@ -396,6 +397,10 @@ class MelodyAgent:
             List[int]: Beat indices marked as accents.
         """
         return sorted(self._accent_beats)
+
+    def get_moved_list(self) -> List[int]:
+        """Return the current loop's syncopation-moved onset indexes."""
+        return sorted(self._moved_list)
 
     def _select_duration(
         self,
@@ -456,6 +461,12 @@ class MelodyAgent:
         beat = index // self.grain
         subdivision = index % self.grain
         events = []
+
+        # Tacet is a documented GUI control for silencing the Melody Agent.
+        # Keep the control at the agent boundary so orchestration cannot revive
+        # a muted melody stream.
+        if getattr(self, "ma_tac", 0.0) >= 0.5:
+            return events
 
         # =============== Melody Rhythm Generation ===============
         if not self._onset_indices:
@@ -579,6 +590,12 @@ class MelodyAgent:
             new_max = int(kwargs["ma_step"])
             if new_max != self.max_step:
                 self.max_step = max(1, new_max)
+                changed = True
+
+        if "ma_tac" in kwargs:
+            new_tac = max(0.0, min(1.0, float(kwargs["ma_tac"])))
+            if new_tac != getattr(self, "ma_tac", 0.0):
+                self.ma_tac = new_tac
                 changed = True
 
         if "ma_range_low" in kwargs and "ma_range_high" in kwargs:
@@ -708,7 +725,7 @@ class MelodyAgent:
                 changed = True
 
         if "shape_length" in kwargs:
-            new_val = max(1, int(kwargs["shape_length"]))
+            new_val = max(0.25, min(8.0, float(kwargs["shape_length"])))
             if new_val != self.shape_length:
                 self.shape_length = new_val
                 changed = True
