@@ -394,26 +394,26 @@ def test_tcp_client_disconnect_sidecar_shuts_down_cleanly(dummy_port):
 def test_tcp_client_disconnect_triggers_silence_non_sidecar():
     """Verify that in non-sidecar mode, client disconnection immediately triggers state.trigger_silence()."""
     state = GameState()
-    silence_invoked = []
-    state.silence_callbacks.append(lambda: silence_invoked.append(True))
 
     async def _main():
+        silenced = asyncio.Event()
+        state.silence_callbacks.append(silenced.set)
         server = await start_tcp_server(host="127.0.0.1", port=9098, state=state, sidecar=False)
         async with server:
             reader, writer = await _open_connection(9098)
-            writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
-            await writer.drain()
-            resp = await _read_json(reader)
-            assert resp["status"] == "ok"
-            assert state.paused is True
+            try:
+                writer.write(b'{"action": "telemetry", "valence": 0.5, "arousal": 0.5}\n')
+                await writer.drain()
+                resp = await _read_json(reader)
+                assert resp["status"] == "ok"
+                assert state.paused is False
+            finally:
+                writer.close()
+                await writer.wait_closed()
 
-            # Disconnect client
-            writer.close()
-            writer.transport.abort()
-            # Allow server task loop to process disconnect
-            await asyncio.sleep(0.05)
+            await asyncio.wait_for(silenced.wait(), timeout=TCP_TEST_TIMEOUT_SECONDS)
 
-        assert len(silence_invoked) >= 1
+        assert silenced.is_set()
         assert state.paused is True
 
     asyncio.run(_main())
